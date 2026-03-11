@@ -1,10 +1,9 @@
 import type { Metadata } from "next";
-import { Header } from "@/components/header";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Rebid Reasons",
-  description: "AEMO NEM Rebid Reason Generator",
+  title: "NEM Dashboard",
+  description: "AEMO NEM Dashboard",
 };
 
 export default function RootLayout({
@@ -15,7 +14,6 @@ export default function RootLayout({
   return (
     <html lang="en" className="dark">
       <body className="antialiased font-sans">
-        <Header />
         <div className="min-h-screen bg-background">
           <main className="p-2 md:p-3">
             {children}
