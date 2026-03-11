@@ -1,17 +1,16 @@
-# NEM Dashboard
+NEM Rebids
+=============
 
 Real-time pre-dispatch change tracker for the NEM. Compares the latest two AEMO runs (5-min and 30-min) and shows what moved — prices, demand, interconnectors, and sensitivities.
 
 Live: https://nem-rebids-beta.vercel.app/
 
-## How to use
-
+How to use
+----------
 Open the link above. Switch between tabs (Prices, Demand, Interconnectors, Sensitivities, Actuals vs 5PD) to see different data. Use the region/interconnector dropdowns to filter. Data auto-refreshes every 30 seconds.
 
-To run locally: `npm install && npm run dev` then open http://localhost:3000. No database or VPN needed — pulls directly from NEMWeb public reports.
-
-## What to test
-
+What to test
+------------
 - Do all tabs load with data?
 - Does it auto-refresh when a new AEMO run comes through (~every 5 min)?
 - Do the region/interconnector filters work?
@@ -19,9 +18,8 @@ To run locally: `npm install && npm run dev` then open http://localhost:3000. No
 - Does copy-to-clipboard work for pasting into emails?
 - Do the numbers look right compared to what you see in other tools?
 
-## Why Next.js over Power BI?
-
-- **Refresh speed** — 30 seconds vs Power BI's 30-minute minimum scheduled refresh
-- **No infrastructure** — no Oracle drivers, no VPN, no on-prem gateway, no Power BI licence
-- **Shareable** — just send a URL, works in any browser
-- **Free** — vs Power BI Pro at ~$14/user/month
+Why Next.js over Power BI?
+--------------------------
+- Refresh speed: 30 seconds vs Power BI's 30-minute minimum scheduled refresh
+- No infrastructure required: no Oracle drivers, no VPN, no on-prem gateway, no Power BI licence
+- Shareable: just send a URL, works in any browser

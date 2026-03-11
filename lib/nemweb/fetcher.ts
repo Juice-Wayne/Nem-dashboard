@@ -17,8 +17,13 @@ interface CacheEntry<T> {
 const dirCache = new Map<string, CacheEntry<string[]>>();
 const csvCache = new Map<string, CacheEntry<Map<string, Record<string, string>[]>>>();
 
-const DIR_TTL = 60_000;   // 60s
+const DIR_TTL = 5_000;    // 5s — aggressive polling to catch new AEMO files immediately
 const CSV_TTL = 300_000;  // 5min — files are immutable once published
+
+/** Clear directory cache — used for forced refresh to pick up newly published files */
+export function clearDirCache(): void {
+  dirCache.clear();
+}
 
 // In-flight request deduplication to avoid hammering AEMO with concurrent fetches
 const inflight = new Map<string, Promise<unknown>>();

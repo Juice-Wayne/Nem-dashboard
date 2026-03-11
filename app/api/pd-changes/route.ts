@@ -9,6 +9,8 @@ import {
   getPredispatchInterconnectorChanges,
   getP5MinSensitivityChanges,
   getPredispatchSensitivityChanges,
+  clearResultCache,
+  clearDirCache,
 } from "@/lib/nemweb";
 
 /** Wrap a query so unverified table names return [] instead of crashing */
@@ -21,10 +23,16 @@ async function safeQuery<T>(fn: () => Promise<T[]>, label: string): Promise<T[]>
   }
 }
 
-const CACHE_HEADERS = { "Cache-Control": "public, s-maxage=60, stale-while-revalidate=300" };
+const CACHE_HEADERS = { "Cache-Control": "public, s-maxage=10, stale-while-revalidate=30" };
 
 export async function GET(request: NextRequest) {
   try {
+    // Force refresh: clear all server-side caches
+    if (request.nextUrl.searchParams.has("force")) {
+      clearResultCache();
+      clearDirCache();
+    }
+
     const type = request.nextUrl.searchParams.get("type");
 
     // --- All types in parallel (single request for all tabs) ---
