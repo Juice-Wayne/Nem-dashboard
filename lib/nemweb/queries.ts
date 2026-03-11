@@ -8,7 +8,7 @@ interface CacheEntry<T> {
 }
 
 const resultCache = new Map<string, CacheEntry<unknown>>();
-const RESULT_TTL = 30_000; // 30s
+const RESULT_TTL = 5_000;  // 5s — aggressive to pick up new data immediately
 
 function getCached<T>(key: string): T | null {
   const c = resultCache.get(key);
@@ -19,6 +19,11 @@ function getCached<T>(key: string): T | null {
 function setCache<T>(key: string, data: T): T {
   resultCache.set(key, { data, expiry: Date.now() + RESULT_TTL });
   return data;
+}
+
+/** Clear all result caches — used for forced refresh */
+export function clearResultCache(): void {
+  resultCache.clear();
 }
 
 // --- Helpers ---
@@ -436,31 +441,37 @@ export async function getP5MinVsActualPrices(): Promise<
   const cached = getCached<ReturnType<typeof getP5MinVsActualPrices>>("vsPrice");
   if (cached) return cached;
 
-  const [[p5data], [dispData]] = await Promise.all([
-    fetchLatest(SOURCES.p5min),
+  // Use the same data as the 5PD changes table — "Current" is the latest forecast
+  // for each interval, which we compare against actuals when they arrive
+  const [p5changes, [dispData]] = await Promise.all([
+    getP5MinPriceChanges(),
     fetchLatest(SOURCES.dispatch),
   ]);
 
-  const forecast = getTable(p5data, "REGIONSOLUTION");
+  // Build forecast lookup from the 5PD "Current" values (CURRENT_RRP)
+  const forecastMap = new Map<string, number>();
+  for (const row of p5changes) {
+    forecastMap.set(`${row.INTERVAL_DATETIME}|${row.REGIONID}`, row.CURRENT_RRP);
+  }
+
   const actual = getTable(dispData, "DISPATCH_PRICE");
 
   // Build actual lookup: settlementdate+region → RRP
   const actualMap = new Map<string, number>();
   for (const r of actual) {
     if (r.INTERVENTION && r.INTERVENTION !== "0") continue;
-    const dt = r.SETTLEMENTDATE || r.INTERVAL_DATETIME || "";
+    const dt = normaliseDate(r.SETTLEMENTDATE || r.INTERVAL_DATETIME || "");
     actualMap.set(`${dt}|${r.REGIONID}`, num(r.RRP));
   }
 
   const results: { INTERVAL_DATETIME: string; REGIONID: string; FORECAST_RRP: number; ACTUAL_RRP: number; DELTA: number }[] = [];
-  for (const r of forecast) {
-    const key = `${r.INTERVAL_DATETIME}|${r.REGIONID}`;
+  for (const [key, fRRP] of forecastMap) {
     const actRRP = actualMap.get(key);
     if (actRRP === undefined) continue;
-    const fRRP = num(r.RRP);
+    const [dt, regionId] = key.split("|");
     results.push({
-      INTERVAL_DATETIME: normaliseDate(r.INTERVAL_DATETIME),
-      REGIONID: r.REGIONID,
+      INTERVAL_DATETIME: dt,
+      REGIONID: regionId,
       FORECAST_RRP: fRRP,
       ACTUAL_RRP: actRRP,
       DELTA: actRRP - fRRP,
@@ -481,30 +492,36 @@ export async function getP5MinVsActualDemand(): Promise<
   const cached = getCached<ReturnType<typeof getP5MinVsActualDemand>>("vsDemand");
   if (cached) return cached;
 
-  const [[p5data], [dispData]] = await Promise.all([
-    fetchLatest(SOURCES.p5min),
+  // Use the same data as the 5PD changes table — "Current" is the latest forecast
+  // for each interval, which we compare against actuals when they arrive
+  const [p5changes, [dispData]] = await Promise.all([
+    getP5MinDemandChanges(),
     fetchLatest(SOURCES.dispatch),
   ]);
 
-  const forecast = getTable(p5data, "REGIONSOLUTION");
+  // Build forecast lookup from the 5PD "Current" values (CURRENT_TOTALDEMAND)
+  const forecastMap = new Map<string, number>();
+  for (const row of p5changes) {
+    forecastMap.set(`${row.INTERVAL_DATETIME}|${row.REGIONID}`, row.CURRENT_TOTALDEMAND);
+  }
+
   const actual = getTable(dispData, "REGIONSUM", "DISPATCH_REGIONSUM");
 
   const actualMap = new Map<string, number>();
   for (const r of actual) {
     if (r.INTERVENTION && r.INTERVENTION !== "0") continue;
-    const dt = r.SETTLEMENTDATE || r.INTERVAL_DATETIME || "";
+    const dt = normaliseDate(r.SETTLEMENTDATE || r.INTERVAL_DATETIME || "");
     actualMap.set(`${dt}|${r.REGIONID}`, num(r.TOTALDEMAND));
   }
 
   const results: { INTERVAL_DATETIME: string; REGIONID: string; FORECAST_TOTALDEMAND: number; ACTUAL_TOTALDEMAND: number; DELTA: number }[] = [];
-  for (const r of forecast) {
-    const key = `${r.INTERVAL_DATETIME}|${r.REGIONID}`;
+  for (const [key, fDem] of forecastMap) {
     const actDem = actualMap.get(key);
     if (actDem === undefined) continue;
-    const fDem = num(r.TOTALDEMAND);
+    const [dt, regionId] = key.split("|");
     results.push({
-      INTERVAL_DATETIME: normaliseDate(r.INTERVAL_DATETIME),
-      REGIONID: r.REGIONID,
+      INTERVAL_DATETIME: dt,
+      REGIONID: regionId,
       FORECAST_TOTALDEMAND: fDem,
       ACTUAL_TOTALDEMAND: actDem,
       DELTA: actDem - fDem,
@@ -525,45 +542,52 @@ export async function getP5MinVsActualInterconnectors(): Promise<
   const cached = getCached<ReturnType<typeof getP5MinVsActualInterconnectors>>("vsIC");
   if (cached) return cached;
 
-  const [[p5data], [dispData]] = await Promise.all([
-    fetchLatest(SOURCES.p5min),
+  // Use the same data as the 5PD changes table so "5PD Forecast" matches "Current" column
+  const [p5changes, [dispData]] = await Promise.all([
+    getP5MinInterconnectorChanges(),
     fetchLatest(SOURCES.dispatch),
   ]);
 
-  const forecast = getTable(p5data, "INTERCONNECTORSOLN");
+  // Build forecast lookup from the 5PD "Current" values
+  const forecastMap = new Map<string, { MWFLOW: number; IMPORTLIMIT: number | null; EXPORTLIMIT: number | null }>();
+  for (const row of p5changes) {
+    forecastMap.set(`${row.INTERVAL_DATETIME}|${row.INTERCONNECTORID}`, {
+      MWFLOW: row.CURRENT_MWFLOW,
+      IMPORTLIMIT: row.CURRENT_IMPORTLIMIT,
+      EXPORTLIMIT: row.CURRENT_EXPORTLIMIT,
+    });
+  }
+
   const actual = getTable(dispData, "INTERCONNECTORRES", "DISPATCH_INTERCONNECTORRES");
 
   const actualMap = new Map<string, Record<string, string>>();
   for (const r of actual) {
-    const dt = r.SETTLEMENTDATE || r.INTERVAL_DATETIME || "";
+    const dt = normaliseDate(r.SETTLEMENTDATE || r.INTERVAL_DATETIME || "");
     actualMap.set(`${dt}|${r.INTERCONNECTORID}`, r);
   }
 
   const results: ReturnType<typeof getP5MinVsActualInterconnectors> extends Promise<infer R> ? R : never = [];
-  for (const r of forecast) {
-    const key = `${r.INTERVAL_DATETIME}|${r.INTERCONNECTORID}`;
+  for (const [key, f] of forecastMap) {
     const act = actualMap.get(key);
     if (!act) continue;
 
-    const fFlow = num(r.MWFLOW);
     const aFlow = num(act.MWFLOW);
-    const fImp = numOrNull(r.IMPORTLIMIT);
     const aImp = numOrNull(act.IMPORTLIMIT);
-    const fExp = numOrNull(r.EXPORTLIMIT);
     const aExp = numOrNull(act.EXPORTLIMIT);
 
+    const [dt, icId] = key.split("|");
     results.push({
-      INTERVAL_DATETIME: normaliseDate(r.INTERVAL_DATETIME),
-      INTERCONNECTORID: r.INTERCONNECTORID,
-      FORECAST_MWFLOW: fFlow,
+      INTERVAL_DATETIME: dt,
+      INTERCONNECTORID: icId,
+      FORECAST_MWFLOW: f.MWFLOW,
       ACTUAL_MWFLOW: aFlow,
-      FLOW_DELTA: aFlow - fFlow,
-      FORECAST_IMPORTLIMIT: fImp,
+      FLOW_DELTA: aFlow - f.MWFLOW,
+      FORECAST_IMPORTLIMIT: f.IMPORTLIMIT,
       ACTUAL_IMPORTLIMIT: aImp,
-      IMPORT_DELTA: aImp !== null && fImp !== null ? aImp - fImp : null,
-      FORECAST_EXPORTLIMIT: fExp,
+      IMPORT_DELTA: aImp !== null && f.IMPORTLIMIT !== null ? aImp - f.IMPORTLIMIT : null,
+      FORECAST_EXPORTLIMIT: f.EXPORTLIMIT,
       ACTUAL_EXPORTLIMIT: aExp,
-      EXPORT_DELTA: aExp !== null && fExp !== null ? aExp - fExp : null,
+      EXPORT_DELTA: aExp !== null && f.EXPORTLIMIT !== null ? aExp - f.EXPORTLIMIT : null,
     });
   }
 

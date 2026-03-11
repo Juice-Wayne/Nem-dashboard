@@ -1,8 +1,10 @@
 "use client";
 
-import { useState, useMemo } from "react";
-import { Copy, Check } from "lucide-react";
+import { useState, useEffect, useMemo, useCallback } from "react";
+import { Copy, Check, RefreshCw } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { useAutoRefresh } from "@/lib/hooks/use-auto-refresh";
+import { NemIntervalBar } from "@/components/nem-interval-bar";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Select,
@@ -263,8 +265,62 @@ export default function HomePage() {
   const [selectedRow, setSelectedRow] = useState<SelectedRow | null>(null);
 
   // Fetch all tab data eagerly in a single request (+ actuals separately)
-  const { data: allChanges } = useAutoRefresh<AllPDChangesData>("/api/pd-changes?type=all");
-  const { data: actualsData } = useAutoRefresh<ActualsData>("/api/pd-vs-actual");
+  const {
+    data: allChanges,
+    isValidating: isRefreshingChanges,
+    manualRefresh: refreshChanges,
+    lastRefreshedAt: changesRefreshedAt,
+  } = useAutoRefresh<AllPDChangesData>("/api/pd-changes?type=all");
+  const {
+    data: actualsData,
+    isValidating: isRefreshingActuals,
+    manualRefresh: refreshActuals,
+    lastRefreshedAt: actualsRefreshedAt,
+  } = useAutoRefresh<ActualsData>("/api/pd-vs-actual");
+
+  const lastRefreshedAt = changesRefreshedAt ?? actualsRefreshedAt ?? null;
+
+  const [manualRefreshing, setManualRefreshing] = useState(false);
+  const isRefreshing = isRefreshingChanges || isRefreshingActuals || manualRefreshing;
+
+  const handleManualRefresh = useCallback(async () => {
+    setManualRefreshing(true);
+    try {
+      await Promise.all([refreshChanges(), refreshActuals()]);
+    } finally {
+      setManualRefreshing(false);
+    }
+  }, [refreshChanges, refreshActuals]);
+
+  // Extract latest actual dispatch price per region
+  const { regionPrices, dataInterval } = useMemo(() => {
+    const shortNames: Record<string, string> = { QLD1: "Q", NSW1: "N", VIC1: "V", SA1: "S" };
+    const order = ["QLD1", "NSW1", "VIC1", "SA1"];
+    const actuals = (actualsData?.prices ?? []) as ActualPrice[];
+
+    // Find the latest interval per region by sorting descending
+    const priceMap = new Map<string, number>();
+    let latestInterval: string | null = null;
+    for (const row of actuals) {
+      const dt = row.INTERVAL_DATETIME;
+      // Keep the latest interval per region
+      if (!priceMap.has(row.REGIONID) || (dt && dt > (latestInterval ?? ""))) {
+        priceMap.set(row.REGIONID, row.ACTUAL_RRP);
+      }
+      if (!latestInterval || dt > latestInterval) {
+        latestInterval = dt;
+      }
+    }
+
+    return {
+      regionPrices: order.map((id) => ({
+        id,
+        short: shortNames[id] ?? id,
+        price: priceMap.get(id) ?? null,
+      })),
+      dataInterval: latestInterval,
+    };
+  }, [actualsData]);
 
   const priceData = allChanges?.prices ?? null;
   const demandData = allChanges?.demand ?? null;
@@ -296,18 +352,45 @@ export default function HomePage() {
   const showRegionSelector = activeTab !== "interconnectors";
   const showInterconnectorSelector = activeTab === "interconnectors";
 
+
   return (
     <div className="space-y-6">
       {/* Tabs */}
       <Tabs value={activeTab} onValueChange={handleTabChange}>
-        <div className="flex items-center justify-between flex-wrap gap-3">
-          <TabsList>
-            <TabsTrigger value="prices">Prices</TabsTrigger>
-            <TabsTrigger value="demand">Demand</TabsTrigger>
-            <TabsTrigger value="interconnectors">Interconnectors</TabsTrigger>
-            <TabsTrigger value="sensitivities">Sensitivities</TabsTrigger>
-            <TabsTrigger value="actuals">Actuals vs 5PD</TabsTrigger>
-          </TabsList>
+        <div className="relative flex items-center justify-between flex-wrap gap-3">
+          <div className="flex items-center gap-1">
+            <TabsList>
+              <TabsTrigger value="prices">Prices</TabsTrigger>
+              <TabsTrigger value="demand">Demand</TabsTrigger>
+              <TabsTrigger value="interconnectors">Interconnectors</TabsTrigger>
+              <TabsTrigger value="sensitivities">Sensitivities</TabsTrigger>
+              <TabsTrigger value="actuals">Actuals vs 5PD</TabsTrigger>
+            </TabsList>
+            <button
+              onClick={handleManualRefresh}
+              disabled={isRefreshing}
+              title={
+                lastRefreshedAt
+                  ? `Last updated: ${lastRefreshedAt.toLocaleTimeString("en-AU", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false, timeZone: "Australia/Brisbane" })} AEST`
+                  : "Refresh data"
+              }
+              className={cn(
+                "flex items-center justify-center h-8 w-8 rounded-lg transition-all duration-150",
+                "text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.04]",
+                isRefreshing && "animate-spin text-zinc-400",
+              )}
+            >
+              <RefreshCw className="h-4 w-4" />
+            </button>
+          </div>
+
+          {/* NEM Interval countdown + current prices — absolutely centered */}
+          <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-auto z-10 hidden lg:block">
+            <NemIntervalBar
+              regionPrices={regionPrices}
+              lastRefreshedAt={lastRefreshedAt}
+            />
+          </div>
 
           {/* Filters */}
           <div className="flex items-center gap-2">
@@ -382,6 +465,7 @@ export default function HomePage() {
             direction={direction}
             selectedRow={selectedRow}
             onSelect={setSelectedRow}
+            actualInterval={dataInterval}
           />
         </TabsContent>
 
@@ -394,6 +478,7 @@ export default function HomePage() {
             direction={direction}
             selectedRow={selectedRow}
             onSelect={setSelectedRow}
+            actualInterval={dataInterval}
           />
         </TabsContent>
 
@@ -405,6 +490,7 @@ export default function HomePage() {
             direction={direction}
             selectedRow={selectedRow}
             onSelect={setSelectedRow}
+            actualInterval={dataInterval}
           />
         </TabsContent>
 
@@ -446,6 +532,7 @@ function PricesTables({
   direction,
   selectedRow,
   onSelect,
+  actualInterval,
 }: {
   data: { p5min: PDChange[]; predispatch: PDChange[] } | undefined;
   region: string;
@@ -453,15 +540,26 @@ function PricesTables({
   direction: Direction;
   selectedRow: SelectedRow | null;
   onSelect: (row: SelectedRow | null) => void;
+  actualInterval?: string | null;
 }) {
   const filtered5pd = useMemo(() => {
     if (!data?.p5min) return [];
-    return sortByTime(filterByDirection(filterByRegion(data.p5min, region), direction));
-  }, [data, region, direction]);
+    let rows = filterByDirection(filterByRegion(data.p5min, region), direction);
+    // Only show intervals after the latest actual (these are forecasts, not actuals)
+    if (actualInterval) {
+      rows = rows.filter((r) => {
+        const dt = r.INTERVAL_DATETIME ?? r.DATETIME ?? "";
+        return dt > actualInterval;
+      });
+    }
+    return sortByTime(rows);
+  }, [data, region, direction, actualInterval]);
 
   const filtered30pd = useMemo(() => {
     if (!data?.predispatch) return [];
-    return sortByTime(filterByDirection(filterByRegion(data.predispatch, region), direction));
+    const rows = filterByDirection(filterByRegion(data.predispatch, region), direction);
+    // Skip first 2 intervals — 5PD already covers that range
+    return sortByTime(rows).slice(2);
   }, [data, region, direction]);
 
   const handleSelect = (source: "5PD" | "30PD", row: PDChange) => {
@@ -583,6 +681,7 @@ function DemandTables({
   direction,
   selectedRow,
   onSelect,
+  actualInterval,
 }: {
   data: { p5min: DemandChange[]; predispatch: DemandChange[] } | undefined;
   region: string;
@@ -590,15 +689,24 @@ function DemandTables({
   direction: Direction;
   selectedRow: SelectedRow | null;
   onSelect: (row: SelectedRow | null) => void;
+  actualInterval?: string | null;
 }) {
   const filtered5pd = useMemo(() => {
     if (!data?.p5min) return [];
-    return sortByTime(filterByDirection(filterByRegion(data.p5min, region), direction));
-  }, [data, region, direction]);
+    let rows = filterByDirection(filterByRegion(data.p5min, region), direction);
+    if (actualInterval) {
+      rows = rows.filter((r) => {
+        const dt = r.INTERVAL_DATETIME ?? r.DATETIME ?? "";
+        return dt > actualInterval;
+      });
+    }
+    return sortByTime(rows);
+  }, [data, region, direction, actualInterval]);
 
   const filtered30pd = useMemo(() => {
     if (!data?.predispatch) return [];
-    return sortByTime(filterByDirection(filterByRegion(data.predispatch, region), direction));
+    const rows = filterByDirection(filterByRegion(data.predispatch, region), direction);
+    return sortByTime(rows).slice(2);
   }, [data, region, direction]);
 
   const handleSelect = (source: "5PD" | "30PD", row: DemandChange) => {
@@ -719,23 +827,33 @@ function InterconnectorTables({
   direction,
   selectedRow,
   onSelect,
+  actualInterval,
 }: {
   data: { p5min: InterconnectorChange[]; predispatch: InterconnectorChange[] } | undefined;
   interconnector: string;
   direction: Direction;
   selectedRow: SelectedRow | null;
   onSelect: (row: SelectedRow | null) => void;
+  actualInterval?: string | null;
 }) {
   const icLabel = interconnector === "all" ? "All" : getInterconnectorName(interconnector);
 
   const filtered5pd = useMemo(() => {
     if (!data?.p5min) return [];
-    return sortByTime(filterByDirection(filterByInterconnector(data.p5min as InterconnectorChange[], interconnector), direction));
-  }, [data, interconnector, direction]);
+    let rows = filterByDirection(filterByInterconnector(data.p5min as InterconnectorChange[], interconnector), direction);
+    if (actualInterval) {
+      rows = rows.filter((r) => {
+        const dt = r.INTERVAL_DATETIME ?? r.DATETIME ?? "";
+        return dt > actualInterval;
+      });
+    }
+    return sortByTime(rows);
+  }, [data, interconnector, direction, actualInterval]);
 
   const filtered30pd = useMemo(() => {
     if (!data?.predispatch) return [];
-    return sortByTime(filterByDirection(filterByInterconnector(data.predispatch as InterconnectorChange[], interconnector), direction));
+    const rows = filterByDirection(filterByInterconnector(data.predispatch as InterconnectorChange[], interconnector), direction);
+    return sortByTime(rows).slice(2);
   }, [data, interconnector, direction]);
 
   const handleSelect = (source: "5PD" | "30PD", row: InterconnectorChange) => {
@@ -878,7 +996,7 @@ function SensitivityTables({
   const filtered30pd = useMemo(() => {
     if (!data?.predispatch) return [];
     const byRegion = data.predispatch.filter((r) => r.REGIONID === region);
-    return sortByTime(filterByDirection(byRegion, direction));
+    return sortByTime(filterByDirection(byRegion, direction)).slice(2);
   }, [data, region, direction]);
 
   const handleSelect = (source: "5PD" | "30PD", row: SensitivityChange) => {

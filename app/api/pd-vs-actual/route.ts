@@ -1,9 +1,11 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 
 import {
   getP5MinVsActualPrices,
   getP5MinVsActualDemand,
   getP5MinVsActualInterconnectors,
+  clearResultCache,
+  clearDirCache,
 } from "@/lib/nemweb";
 
 async function safeQuery<T>(fn: () => Promise<T[]>, label: string): Promise<T[]> {
@@ -15,8 +17,12 @@ async function safeQuery<T>(fn: () => Promise<T[]>, label: string): Promise<T[]>
   }
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
+    if (request.nextUrl.searchParams.has("force")) {
+      clearResultCache();
+      clearDirCache();
+    }
     const [prices, demand, interconnectors] = await Promise.all([
       safeQuery(getP5MinVsActualPrices, "prices"),
       safeQuery(getP5MinVsActualDemand, "demand"),
@@ -25,7 +31,7 @@ export async function GET() {
 
     return NextResponse.json(
       { prices, demand, interconnectors },
-      { headers: { "Cache-Control": "public, s-maxage=60, stale-while-revalidate=300" } },
+      { headers: { "Cache-Control": "public, s-maxage=10, stale-while-revalidate=30" } },
     );
   } catch (error) {
     console.error("PD vs Actual API error:", error);
