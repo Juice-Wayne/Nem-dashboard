@@ -891,8 +891,8 @@ function InterconnectorTables({
                     <TableRow>
                       <TableHead>Interval</TableHead>
                       <TableHead>IC</TableHead>
-                      <TableHead className="text-right">Prev Flow</TableHead>
-                      <TableHead className="text-right">Curr Flow</TableHead>
+                      <TableHead className="text-right">Previous</TableHead>
+                      <TableHead className="text-right">Current</TableHead>
                       <TableHead className="text-right">Delta</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -936,8 +936,8 @@ function InterconnectorTables({
                     <TableRow>
                       <TableHead>Interval</TableHead>
                       <TableHead>IC</TableHead>
-                      <TableHead className="text-right">Prev Flow</TableHead>
-                      <TableHead className="text-right">Curr Flow</TableHead>
+                      <TableHead className="text-right">Previous</TableHead>
+                      <TableHead className="text-right">Current</TableHead>
                       <TableHead className="text-right">Delta</TableHead>
                     </TableRow>
                   </TableHeader>
