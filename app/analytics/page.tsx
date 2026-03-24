@@ -63,49 +63,28 @@ interface RebidRow {
   TOTALAVAIL: number;
 }
 
-type FuelCategory = "Coal" | "Gas" | "Hydro" | "Wind" | "Solar" | "Battery" | "Other";
-const FUEL_CATEGORIES: FuelCategory[] = ["Coal", "Gas", "Hydro", "Wind", "Solar", "Battery", "Other"];
-
 function RebidsTab() {
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<"ALL" | "ENERGY" | "FCAS">("ENERGY");
-  const [fuelFilter, setFuelFilter] = useState<"ALL" | FuelCategory>("ALL");
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
   const { data, error } = useSWR("/api/analytics?tab=rebids", fetcher, { refreshInterval: 15000 });
 
-  const fuelMap = useMemo(() => {
-    if (!data?.fuel) return {} as Record<string, FuelCategory>;
-    return data.fuel as Record<string, FuelCategory>;
-  }, [data]);
-
-  const { filtered, counts, fuelCounts } = useMemo(() => {
-    if (!data?.rebids) return { filtered: [] as RebidRow[], counts: { total: 0, energy: 0, fcas: 0 }, fuelCounts: {} as Record<string, number> };
+  const { filtered, counts } = useMemo(() => {
+    if (!data?.rebids) return { filtered: [] as RebidRow[], counts: { total: 0, energy: 0, fcas: 0 } };
     const all = data.rebids as RebidRow[];
     const energy = all.filter((r) => r.BIDCATEGORY === "ENERGY").length;
     const fcas = all.filter((r) => r.BIDCATEGORY === "FCAS").length;
-
-    // Count fuel types for energy rebids
-    const fc: Record<string, number> = {};
-    for (const r of all) {
-      if (r.BIDCATEGORY === "ENERGY") {
-        const fuel = fuelMap[r.DUID] ?? "Other";
-        fc[fuel] = (fc[fuel] ?? 0) + 1;
-      }
-    }
 
     let rows = all;
     if (categoryFilter !== "ALL") {
       rows = rows.filter((r) => r.BIDCATEGORY === categoryFilter);
     }
-    if (fuelFilter !== "ALL") {
-      rows = rows.filter((r) => (fuelMap[r.DUID] ?? "Other") === fuelFilter);
-    }
     if (search) {
       const s = search.toUpperCase();
       rows = rows.filter((r) => r.DUID.includes(s) || r.REBIDEXPLANATION.toUpperCase().includes(s));
     }
-    return { filtered: rows.slice(0, 100), counts: { total: all.length, energy, fcas }, fuelCounts: fc };
-  }, [data, search, categoryFilter, fuelFilter, fuelMap]);
+    return { filtered: rows.slice(0, 100), counts: { total: all.length, energy, fcas } };
+  }, [data, search, categoryFilter]);
 
   const copyExplanation = useCallback((text: string, idx: number) => {
     navigator.clipboard.writeText(text);
@@ -134,36 +113,13 @@ function RebidsTab() {
           {(["ALL", "ENERGY", "FCAS"] as const).map((cat) => (
             <button
               key={cat}
-              onClick={() => { setCategoryFilter(cat); if (cat === "FCAS") setFuelFilter("ALL"); }}
+              onClick={() => setCategoryFilter(cat)}
               className={`px-2 py-1 text-[10px] rounded font-medium transition-colors ${categoryFilter === cat ? "bg-blue-500/15 text-blue-400" : "text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.04]"}`}
             >
               {cat === "ALL" ? `All (${counts.total})` : cat === "ENERGY" ? `Energy (${counts.energy})` : `FCAS (${counts.fcas})`}
             </button>
           ))}
         </div>
-        {categoryFilter !== "FCAS" && (
-          <div className="flex items-center gap-1 border-l border-zinc-700/50 pl-2">
-            <button
-              onClick={() => setFuelFilter("ALL")}
-              className={`px-2 py-1 text-[10px] rounded font-medium transition-colors ${fuelFilter === "ALL" ? "bg-blue-500/15 text-blue-400" : "text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.04]"}`}
-            >
-              All Fuel
-            </button>
-            {FUEL_CATEGORIES.map((fuel) => {
-              const count = fuelCounts[fuel] ?? 0;
-              if (count === 0) return null;
-              return (
-                <button
-                  key={fuel}
-                  onClick={() => setFuelFilter(fuelFilter === fuel ? "ALL" : fuel)}
-                  className={`px-2 py-1 text-[10px] rounded font-medium transition-colors ${fuelFilter === fuel ? "bg-blue-500/15 text-blue-400" : "text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.04]"}`}
-                >
-                  {fuel} ({count})
-                </button>
-              );
-            })}
-          </div>
-        )}
         <span className="text-[10px] text-zinc-600 ml-auto">{filtered.length} shown</span>
       </div>
 
@@ -195,12 +151,7 @@ function RebidsTab() {
                         {shortDateTime(r.REBIDTIME)}
                       </td>
                       <td className="px-3 py-2 font-mono font-semibold text-zinc-200 whitespace-nowrap align-top">
-                        <span>{r.DUID}</span>
-                        {fuelMap[r.DUID] && (
-                          <span className="ml-1.5 text-[8px] font-sans font-medium px-1 py-0.5 rounded bg-zinc-700/40 text-zinc-400 dark:bg-zinc-700/40 dark:text-zinc-400">
-                            {fuelMap[r.DUID]}
-                          </span>
-                        )}
+                        {r.DUID}
                       </td>
                       <td className="px-3 py-2 align-top">
                         <span className={`text-[9px] px-1.5 py-0.5 rounded font-medium ${
