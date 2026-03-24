@@ -13,7 +13,6 @@ import {
   DEFAULT_START_COST_CONFIG,
   clearResultCache,
   clearDirCache,
-  getDuidFuelMap,
 } from "@/lib/nemweb";
 
 async function safeQuery<T>(fn: () => Promise<T[]>, label: string): Promise<T[]> {
@@ -67,14 +66,8 @@ export async function GET(request: NextRequest) {
     }
 
     if (tab === "rebids") {
-      const [data, fuelMap] = await Promise.all([
-        safeQuery(getRebidFeed, "BIDMOVE_REBIDS"),
-        getDuidFuelMap().catch(() => new Map()),
-      ]);
-      // Convert Map to plain object for JSON
-      const fuel: Record<string, string> = {};
-      for (const [k, v] of fuelMap) fuel[k] = v;
-      return NextResponse.json({ rebids: data, fuel }, { headers: CACHE_HEADERS });
+      const data = await safeQuery(getRebidFeed, "BIDMOVE_REBIDS");
+      return NextResponse.json({ rebids: data }, { headers: CACHE_HEADERS });
     }
 
     if (tab === "spikes") {
