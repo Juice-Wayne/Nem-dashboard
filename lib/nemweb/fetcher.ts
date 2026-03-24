@@ -139,6 +139,12 @@ export const SOURCES = {
   predispatch: { path: "/Reports/Current/PredispatchIS_Reports/", count: 2 },
   dispatch: { path: "/Reports/Current/DispatchIS_Reports/", count: 1 },
   sensitivities: { path: "/Reports/Current/Predispatch_Sensitivities/", count: 2 },
+  // Analytics sources
+  dispatchScada: { path: "/Reports/Current/Dispatch_SCADA/", count: 1 },
+  bidmove: { path: "/Reports/Current/Bidmove_Complete/", count: 1 },
+  stpasa: { path: "/Reports/Current/STPASA_Reports/", count: 1 },
+  rooftopPvActual: { path: "/Reports/Current/Rooftop_PV/Actual/", count: 12 },
+  rooftopPvForecast: { path: "/Reports/Current/Rooftop_PV/Forecast/", count: 1 },
 } as const;
 
 /**
@@ -163,4 +169,60 @@ export async function fetchLatest(
 /** Normalise AEMO datetime "2026/03/04 09:35:00" → ISO "2026-03-04T09:35:00" */
 export function normaliseDate(d: string): string {
   return d.replace(/\//g, "-").replace(" ", "T");
+}
+
+// --- DUID fuel type mapping from AEMO CDEII ---
+
+export type FuelCategory = "Coal" | "Gas" | "Hydro" | "Wind" | "Solar" | "Battery" | "Other";
+
+const ENERGY_SOURCE_TO_CATEGORY: Record<string, FuelCategory> = {
+  "Black coal": "Coal",
+  "Brown coal": "Coal",
+  "Natural Gas (Pipeline)": "Gas",
+  "Coal seam methane": "Gas",
+  "Coal mine waste gas": "Gas",
+  "Ethane": "Gas",
+  "Hydro": "Hydro",
+  "Wind": "Wind",
+  "Solar": "Solar",
+  "Battery Storage": "Battery",
+  // Everything else → Other (Diesel, Biomass, Landfill, Bagasse, etc.)
+};
+
+let duidFuelCache: { data: Map<string, FuelCategory>; expiry: number } | null = null;
+const FUEL_TTL = 24 * 60 * 60 * 1000; // 24h — rarely changes
+
+/** Fetch DUID → fuel category mapping from AEMO CDEII Available Generators */
+export async function getDuidFuelMap(): Promise<Map<string, FuelCategory>> {
+  if (duidFuelCache && Date.now() < duidFuelCache.expiry) return duidFuelCache.data;
+
+  return dedup("duid-fuel", async () => {
+    const url = `${BASE}/Reports/Current/CDEII/CO2EII_AVAILABLE_GENERATORS.CSV`;
+    const res = await fetchWithRetry(url);
+    const text = await res.text();
+
+    const map = new Map<string, FuelCategory>();
+    const lines = text.split("\n");
+
+    // AEMO CSV format: record type, table, ... — I rows are headers, D rows are data
+    let duidIdx = -1;
+    let sourceIdx = -1;
+
+    for (const line of lines) {
+      const cols = line.split(",").map((c) => c.trim().replace(/^"|"$/g, ""));
+      if (cols[0] === "I") {
+        duidIdx = cols.indexOf("DUID");
+        sourceIdx = cols.indexOf("CO2E_ENERGY_SOURCE");
+      } else if (cols[0] === "D" && duidIdx >= 0 && sourceIdx >= 0) {
+        const duid = cols[duidIdx];
+        const source = cols[sourceIdx];
+        if (duid && source) {
+          map.set(duid, ENERGY_SOURCE_TO_CATEGORY[source] ?? "Other");
+        }
+      }
+    }
+
+    duidFuelCache = { data: map, expiry: Date.now() + FUEL_TTL };
+    return map;
+  });
 }
