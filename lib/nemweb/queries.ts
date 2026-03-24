@@ -594,3 +594,592 @@ export async function getP5MinVsActualInterconnectors(): Promise<
   results.sort((a, b) => Math.abs(b.FLOW_DELTA) - Math.abs(a.FLOW_DELTA));
   return setCache("vsIC", results);
 }
+
+// =======================================================================
+// Analytics — Generation Stack (DISPATCH_UNIT_SCADA)
+// =======================================================================
+
+export async function getGenerationStack(): Promise<
+  { DUID: string; SCADAVALUE: number }[]
+> {
+  const cached = getCached<ReturnType<typeof getGenerationStack>>("genStack");
+  if (cached) return cached;
+
+  const [data] = await fetchLatest(SOURCES.dispatchScada);
+  const rows = getTable(data, "DISPATCH_UNIT_SCADA", "UNIT_SCADA");
+
+  const results = rows.map((r) => ({
+    DUID: r.DUID,
+    SCADAVALUE: num(r.SCADAVALUE),
+  }));
+
+  results.sort((a, b) => b.SCADAVALUE - a.SCADAVALUE);
+  return setCache("genStack", results);
+}
+
+// =======================================================================
+// Analytics — Binding Constraints
+// =======================================================================
+
+export async function getBindingConstraints(): Promise<
+  { CONSTRAINTID: string; INTERVAL_DATETIME: string; RHS: number; MARGINALVALUE: number; VIOLATIONDEGREE: number }[]
+> {
+  const cached = getCached<ReturnType<typeof getBindingConstraints>>("constraints");
+  if (cached) return cached;
+
+  const [data] = await fetchLatest(SOURCES.dispatch);
+  const rows = getTable(data, "DISPATCH_CONSTRAINT", "CONSTRAINT");
+
+  const results: { CONSTRAINTID: string; INTERVAL_DATETIME: string; RHS: number; MARGINALVALUE: number; VIOLATIONDEGREE: number }[] = [];
+  for (const r of rows) {
+    const mv = num(r.MARGINALVALUE);
+    if (mv === 0) continue; // only binding constraints
+    results.push({
+      CONSTRAINTID: r.CONSTRAINTID || r.GENCONID || "",
+      INTERVAL_DATETIME: normaliseDate(r.SETTLEMENTDATE || r.INTERVAL_DATETIME || ""),
+      RHS: num(r.RHS),
+      MARGINALVALUE: mv,
+      VIOLATIONDEGREE: num(r.VIOLATIONDEGREE),
+    });
+  }
+
+  results.sort((a, b) => Math.abs(b.MARGINALVALUE) - Math.abs(a.MARGINALVALUE));
+  return setCache("constraints", results);
+}
+
+// =======================================================================
+// Analytics — FCAS Prices
+// =======================================================================
+
+export async function getFcasPrices(): Promise<
+  { REGIONID: string; INTERVAL_DATETIME: string; RAISE6SECRRP: number; RAISE60SECRRP: number; RAISE5MINRRP: number; RAISEREGRRP: number; LOWER6SECRRP: number; LOWER60SECRRP: number; LOWER5MINRRP: number; LOWERREGRRP: number }[]
+> {
+  const cached = getCached<ReturnType<typeof getFcasPrices>>("fcas");
+  if (cached) return cached;
+
+  const [data] = await fetchLatest(SOURCES.dispatch);
+  const rows = getTable(data, "DISPATCH_PRICE", "PRICE");
+
+  const results = rows
+    .filter((r) => !r.INTERVENTION || r.INTERVENTION === "0")
+    .map((r) => ({
+      REGIONID: r.REGIONID,
+      INTERVAL_DATETIME: normaliseDate(r.SETTLEMENTDATE || r.INTERVAL_DATETIME || ""),
+      RAISE6SECRRP: num(r.RAISE6SECRRP),
+      RAISE60SECRRP: num(r.RAISE60SECRRP),
+      RAISE5MINRRP: num(r.RAISE5MINRRP),
+      RAISEREGRRP: num(r.RAISEREGRRP),
+      LOWER6SECRRP: num(r.LOWER6SECRRP),
+      LOWER60SECRRP: num(r.LOWER60SECRRP),
+      LOWER5MINRRP: num(r.LOWER5MINRRP),
+      LOWERREGRRP: num(r.LOWERREGRRP),
+    }));
+
+  return setCache("fcas", results);
+}
+
+// =======================================================================
+// Analytics — Bid Stack (Bidmove Complete)
+// =======================================================================
+
+export async function getBidStack(): Promise<
+  { DUID: string; BIDTYPE: string; REBIDEXPLANATION: string; PRICEBAND1: number; PRICEBAND2: number; PRICEBAND3: number; PRICEBAND4: number; PRICEBAND5: number; PRICEBAND6: number; PRICEBAND7: number; PRICEBAND8: number; PRICEBAND9: number; PRICEBAND10: number; BANDAVAIL1: number; BANDAVAIL2: number; BANDAVAIL3: number; BANDAVAIL4: number; BANDAVAIL5: number; BANDAVAIL6: number; BANDAVAIL7: number; BANDAVAIL8: number; BANDAVAIL9: number; BANDAVAIL10: number }[]
+> {
+  const cached = getCached<ReturnType<typeof getBidStack>>("bidstack");
+  if (cached) return cached;
+
+  const [data] = await fetchLatest(SOURCES.bidmove);
+  const rows = getTable(data, "BIDMOVE_COMPLETE", "BIDDAYOFFER", "BIDPEROFFER");
+
+  const results = rows.map((r) => ({
+    DUID: r.DUID,
+    BIDTYPE: r.BIDTYPE || "ENERGY",
+    REBIDEXPLANATION: r.REBIDEXPLANATION || "",
+    PRICEBAND1: num(r.PRICEBAND1), PRICEBAND2: num(r.PRICEBAND2), PRICEBAND3: num(r.PRICEBAND3),
+    PRICEBAND4: num(r.PRICEBAND4), PRICEBAND5: num(r.PRICEBAND5), PRICEBAND6: num(r.PRICEBAND6),
+    PRICEBAND7: num(r.PRICEBAND7), PRICEBAND8: num(r.PRICEBAND8), PRICEBAND9: num(r.PRICEBAND9),
+    PRICEBAND10: num(r.PRICEBAND10),
+    BANDAVAIL1: num(r.BANDAVAIL1), BANDAVAIL2: num(r.BANDAVAIL2), BANDAVAIL3: num(r.BANDAVAIL3),
+    BANDAVAIL4: num(r.BANDAVAIL4), BANDAVAIL5: num(r.BANDAVAIL5), BANDAVAIL6: num(r.BANDAVAIL6),
+    BANDAVAIL7: num(r.BANDAVAIL7), BANDAVAIL8: num(r.BANDAVAIL8), BANDAVAIL9: num(r.BANDAVAIL9),
+    BANDAVAIL10: num(r.BANDAVAIL10),
+  }));
+
+  return setCache("bidstack", results);
+}
+
+// =======================================================================
+// Analytics — Rooftop PV (Actual + Forecast)
+// =======================================================================
+
+export async function getRooftopPV(): Promise<
+  { REGIONID: string; INTERVAL_DATETIME: string; ACTUAL_MW: number | null; FORECAST_MW: number | null }[]
+> {
+  const cached = getCached<ReturnType<typeof getRooftopPV>>("rooftoppv");
+  if (cached) return cached;
+
+  const [actualFiles, forecastFiles] = await Promise.all([
+    fetchLatest(SOURCES.rooftopPvActual),
+    fetchLatest(SOURCES.rooftopPvForecast),
+  ]);
+
+  // Merge rows from all actual files (each file typically has one interval)
+  const actualRows: Record<string, string>[] = [];
+  for (const file of actualFiles) {
+    actualRows.push(...getTable(file, "ROOFTOP_PV_ACTUAL", "ROOFTOP_ACTUAL", "ACTUAL"));
+  }
+  const forecastRows = getTable(forecastFiles[0], "ROOFTOP_PV_FORECAST", "ROOFTOP_FORECAST", "FORECAST", "REGIONFORECAST");
+
+  // Build maps keyed by interval+region
+  const actualMap = new Map<string, number>();
+  for (const r of actualRows) {
+    const dt = normaliseDate(r.INTERVAL_DATETIME || r.SETTLEMENTDATE || "");
+    actualMap.set(`${dt}|${r.REGIONID}`, num(r.POWER || r.GENERATION || r.MW || "0"));
+  }
+
+  const forecastMap = new Map<string, number>();
+  for (const r of forecastRows) {
+    const dt = normaliseDate(r.INTERVAL_DATETIME || r.SETTLEMENTDATE || "");
+    forecastMap.set(`${dt}|${r.REGIONID}`, num(r.POWER || r.GENERATION || r.POWERMEAN || r.MW || "0"));
+  }
+
+  // Merge keys
+  const allKeys = new Set([...actualMap.keys(), ...forecastMap.keys()]);
+  const results: { REGIONID: string; INTERVAL_DATETIME: string; ACTUAL_MW: number | null; FORECAST_MW: number | null }[] = [];
+  for (const key of allKeys) {
+    const [dt, regionId] = key.split("|");
+    results.push({
+      REGIONID: regionId,
+      INTERVAL_DATETIME: dt,
+      ACTUAL_MW: actualMap.get(key) ?? null,
+      FORECAST_MW: forecastMap.get(key) ?? null,
+    });
+  }
+
+  results.sort((a, b) => a.INTERVAL_DATETIME.localeCompare(b.INTERVAL_DATETIME));
+  return setCache("rooftoppv", results);
+}
+
+// =======================================================================
+// Analytics — Rebid Feed (BIDMOVE_COMPLETE)
+// Groups FCAS services into a single entry per DUID+REBIDTIME
+// =======================================================================
+
+export interface RebidEntry {
+  DUID: string;
+  BIDCATEGORY: "ENERGY" | "FCAS";
+  FCAS_SERVICES: string[];       // e.g. ["RAISE6SEC","LOWER60SEC"] — empty for ENERGY
+  REBIDTIME: string;
+  REBIDCATEGORY: string;
+  REBIDEXPLANATION: string;
+  BANDAVAIL: number[];           // 10 bands (ENERGY only, empty for FCAS)
+  PRICEBAND: number[];           // 10 bands (ENERGY only, empty for FCAS)
+  TOTALAVAIL: number;
+}
+
+export async function getRebidFeed(): Promise<RebidEntry[]> {
+  const cached = getCached<RebidEntry[]>("rebidFeed");
+  if (cached) return cached;
+
+  const [data] = await fetchLatest(SOURCES.bidmove);
+  const rows = getTable(data, "BIDMOVE_COMPLETE", "BIDDAYOFFER", "BIDPEROFFER");
+
+  const energyResults: RebidEntry[] = [];
+  // Group FCAS by DUID+REBIDTIME to avoid double-counting
+  const fcasGroupMap = new Map<string, RebidEntry>();
+
+  for (const r of rows) {
+    const duid = r.DUID || "";
+    const bidtype = r.BIDTYPE || "ENERGY";
+    const rebidTime = normaliseDate(r.REBIDTIME || r.OFFERDATE || r.SETTLEMENTDATE || "");
+    const explanation = r.REBIDEXPLANATION || "";
+    const category = r.REBIDCATEGORY || "";
+
+    if (bidtype === "ENERGY") {
+      const bandAvail: number[] = [];
+      const priceBand: number[] = [];
+      let totalAvail = 0;
+      for (let i = 1; i <= 10; i++) {
+        const avail = num(r[`BANDAVAIL${i}`]);
+        bandAvail.push(avail);
+        priceBand.push(num(r[`PRICEBAND${i}`]));
+        totalAvail += avail;
+      }
+
+      energyResults.push({
+        DUID: duid,
+        BIDCATEGORY: "ENERGY",
+        FCAS_SERVICES: [],
+        REBIDTIME: rebidTime,
+        REBIDCATEGORY: category,
+        REBIDEXPLANATION: explanation,
+        BANDAVAIL: bandAvail,
+        PRICEBAND: priceBand,
+        TOTALAVAIL: totalAvail,
+      });
+    } else {
+      // FCAS — group by DUID + REBIDTIME
+      const groupKey = `${duid}|${rebidTime}`;
+      const existing = fcasGroupMap.get(groupKey);
+      if (existing) {
+        if (!existing.FCAS_SERVICES.includes(bidtype)) {
+          existing.FCAS_SERVICES.push(bidtype);
+        }
+        // Use the longest explanation if different
+        if (explanation.length > existing.REBIDEXPLANATION.length) {
+          existing.REBIDEXPLANATION = explanation;
+        }
+      } else {
+        fcasGroupMap.set(groupKey, {
+          DUID: duid,
+          BIDCATEGORY: "FCAS",
+          FCAS_SERVICES: [bidtype],
+          REBIDTIME: rebidTime,
+          REBIDCATEGORY: category,
+          REBIDEXPLANATION: explanation,
+          BANDAVAIL: [],
+          PRICEBAND: [],
+          TOTALAVAIL: 0,
+        });
+      }
+    }
+  }
+
+  const results = [...energyResults, ...fcasGroupMap.values()];
+  // Sort newest rebid first
+  results.sort((a, b) => b.REBIDTIME.localeCompare(a.REBIDTIME));
+  return setCache("rebidFeed", results);
+}
+
+// =======================================================================
+// Analytics — Price Spike Lookback (dynamic range from NEMWeb)
+// Each hour = 12 dispatch files. Files are cached after first download.
+// =======================================================================
+
+export interface PriceSpikeEntry {
+  INTERVAL_DATETIME: string;
+  REGIONID: string;
+  RRP: number;
+  SEVERITY: "extreme" | "high" | "negative";
+  BINDING_CONSTRAINTS: { CONSTRAINTID: string; MARGINALVALUE: number }[];
+}
+
+export async function getPriceSpikes(hours: number = 3): Promise<PriceSpikeEntry[]> {
+  const clampedHours = Math.max(1, Math.min(168, hours));
+  const cacheKey = `priceSpikes_${clampedHours}h`;
+  const cached = getCached<PriceSpikeEntry[]>(cacheKey);
+  if (cached) return cached;
+
+  const fileCount = clampedHours * 12;
+  const dispFiles = await fetchLatest({
+    path: SOURCES.dispatch.path,
+    count: fileCount,
+  });
+
+  const constraintMap = new Map<string, { CONSTRAINTID: string; MARGINALVALUE: number }[]>();
+  const results: PriceSpikeEntry[] = [];
+  const seen = new Set<string>();
+
+  for (const dispData of dispFiles) {
+    const priceRows = getTable(dispData, "DISPATCH_PRICE", "PRICE");
+    const constraintRows = getTable(dispData, "DISPATCH_CONSTRAINT", "CONSTRAINT");
+
+    for (const r of constraintRows) {
+      const mv = num(r.MARGINALVALUE);
+      if (mv === 0) continue;
+      const dt = normaliseDate(r.SETTLEMENTDATE || r.INTERVAL_DATETIME || "");
+      if (!constraintMap.has(dt)) constraintMap.set(dt, []);
+      constraintMap.get(dt)!.push({
+        CONSTRAINTID: r.CONSTRAINTID || r.GENCONID || "",
+        MARGINALVALUE: mv,
+      });
+    }
+
+    for (const r of priceRows) {
+      if (r.INTERVENTION && r.INTERVENTION !== "0") continue;
+      const rrp = num(r.RRP);
+      const dt = normaliseDate(r.SETTLEMENTDATE || r.INTERVAL_DATETIME || "");
+      const dedupeKey = `${dt}|${r.REGIONID}`;
+      if (seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
+
+      let severity: PriceSpikeEntry["SEVERITY"] | null = null;
+      if (rrp >= 1000) severity = "extreme";
+      else if (rrp >= 300) severity = "high";
+      else if (rrp <= -30) severity = "negative";
+
+      if (!severity) continue;
+
+      const constraints = [...(constraintMap.get(dt) || [])];
+      constraints.sort((a, b) => Math.abs(b.MARGINALVALUE) - Math.abs(a.MARGINALVALUE));
+
+      results.push({
+        INTERVAL_DATETIME: dt,
+        REGIONID: r.REGIONID,
+        RRP: rrp,
+        SEVERITY: severity,
+        BINDING_CONSTRAINTS: constraints.slice(0, 5),
+      });
+    }
+  }
+
+  results.sort((a, b) => {
+    const timeDiff = b.INTERVAL_DATETIME.localeCompare(a.INTERVAL_DATETIME);
+    if (timeDiff !== 0) return timeDiff;
+    return Math.abs(b.RRP) - Math.abs(a.RRP);
+  });
+
+  return setCache(cacheKey, results);
+}
+
+// =======================================================================
+// Analytics — Reserve Margins (STPASA)
+// =======================================================================
+
+export async function getReserveMargins(): Promise<
+  { REGIONID: string; INTERVAL_DATETIME: string; DEMAND10: number; DEMAND50: number; SURPLUSRESERVE: number; RESERVECONDITION: number }[]
+> {
+  const cached = getCached<ReturnType<typeof getReserveMargins>>("reserves");
+  if (cached) return cached;
+
+  const [data] = await fetchLatest(SOURCES.stpasa);
+  const rows = getTable(data, "STPASA_REGIONSOLUTION", "REGIONSOLUTION");
+
+  const results = rows.map((r) => ({
+    REGIONID: r.REGIONID,
+    INTERVAL_DATETIME: normaliseDate(r.INTERVAL_DATETIME || r.SETTLEMENTDATE || ""),
+    DEMAND10: num(r.DEMAND10),
+    DEMAND50: num(r.DEMAND50),
+    SURPLUSRESERVE: num(r.SURPLUSRESERVE),
+    RESERVECONDITION: num(r.RESERVECONDITION || r.RESERVE_CONDITION || "0"),
+  }));
+
+  results.sort((a, b) => a.INTERVAL_DATETIME.localeCompare(b.INTERVAL_DATETIME));
+  return setCache("reserves", results);
+}
+
+// =======================================================================
+// Analytics — BR Start Cost Analysis
+// Models Braemar-style OCGT start economics using P5MIN 5-minute prices.
+// Per-interval margin: MW × (price − heatRate × gasCost) / 12
+// Running balance starts at −startCost; recovered when balance > 0.
+// =======================================================================
+
+export interface StartCostConfig {
+  gasCostGJ: number;       // $/GJ delivered gas price
+  startCost: number;       // $ fixed cost per start
+  loadMW: number;          // MW full load output
+  heatRate: number;        // GJ/MWh at full load
+  rampRateMWMin: number;   // MW/min ramp rate
+}
+
+export interface StartInterval {
+  time: string;
+  rrp: number;
+  mw: number;
+  gasCostInterval: number; // gas cost for this 5-min interval
+  revenue: number;         // price × MW / 12
+  margin: number;          // revenue − gasCost for this interval
+  cumBalance: number;      // running balance (starts at −startCost)
+}
+
+export interface StartAnalysis {
+  startTime: string;
+  intervals: StartInterval[];
+  recoveryTime: string | null;  // time when cumBalance first > 0
+  recoveryMinutes: number | null;
+  finalBalance: number;
+  peakBalance: number;
+  optimalStopTime: string | null; // time to turn off for max profit
+  optimalRunMinutes: number | null;
+  optimalProfit: number;          // max cumBalance achieved
+}
+
+export interface StartCostResult {
+  config: StartCostConfig;
+  regionId: string;
+  srmc: number;              // gasCost × heatRate at full load
+  allPrices: { time: string; rrp: number }[];
+  analyses: StartAnalysis[]; // one per candidate start time
+  bestStart: StartAnalysis | null;
+}
+
+export const DEFAULT_START_COST_CONFIG: StartCostConfig = {
+  gasCostGJ: 11.5,
+  startCost: 35000,
+  loadMW: 170,
+  heatRate: 10.4,
+  rampRateMWMin: 11,
+};
+
+export async function getStartCostAnalysis(
+  regionId: string = "QLD1",
+  config: StartCostConfig = DEFAULT_START_COST_CONFIG,
+  tradingDay: "today" | "d+1" = "today",
+): Promise<StartCostResult> {
+  // Fetch both P5MIN (5-min intervals, ~1hr) and PD (30-min intervals, ~36hr)
+  const [[p5Current], [pdCurrent]] = await Promise.all([
+    fetchLatest(SOURCES.p5min),
+    fetchLatest(SOURCES.predispatch),
+  ]);
+
+  // P5MIN prices — 5-minute granularity
+  const p5Rows = getTable(p5Current, "REGIONSOLUTION");
+  const p5Prices: { time: string; rrp: number; durationMin: number }[] = [];
+  for (const r of p5Rows) {
+    if (r.REGIONID !== regionId) continue;
+    const dt = normaliseDate(r.INTERVAL_DATETIME || r.DATETIME || "");
+    p5Prices.push({ time: dt, rrp: num(r.RRP), durationMin: 5 });
+  }
+  p5Prices.sort((a, b) => a.time.localeCompare(b.time));
+
+  // PD prices — 30-minute granularity
+  const pdRows = getTable(pdCurrent, "REGION_PRICES", "REGIONPRICE", "PRICE");
+  const pdPrices: { time: string; rrp: number; durationMin: number }[] = [];
+  for (const r of pdRows) {
+    if (r.REGIONID !== regionId) continue;
+    const dt = normaliseDate(r.DATETIME || r.PERIODID || r.INTERVAL_DATETIME || "");
+    pdPrices.push({ time: dt, rrp: num(r.RRP), durationMin: 30 });
+  }
+  pdPrices.sort((a, b) => a.time.localeCompare(b.time));
+
+  // Blend: use P5MIN where available, then PD for the rest
+  const p5End = p5Prices.length > 0 ? p5Prices[p5Prices.length - 1].time : "";
+  const allPrices: { time: string; rrp: number; durationMin: number }[] = [...p5Prices];
+  for (const p of pdPrices) {
+    if (p.time > p5End) allPrices.push(p);
+  }
+  allPrices.sort((a, b) => a.time.localeCompare(b.time));
+
+  // Filter to NEM trading day (04:00 AEST to 04:00 AEST next day)
+  // AEMO timestamps are in AEST — compare as strings, no TZ conversion
+  const now = new Date();
+  const aestMs = now.getTime() + (10 * 60 + now.getTimezoneOffset()) * 60000;
+  const aestNow = new Date(aestMs);
+  // Trading day base: if before 04:00 AEST, trading day started yesterday
+  let dayOffset = 0;
+  if (aestNow.getHours() < 4) dayOffset = -1;
+  if (tradingDay === "d+1") dayOffset += 1;
+
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const base = new Date(aestMs + dayOffset * 86400000);
+  const tdStart = `${base.getFullYear()}-${pad(base.getMonth() + 1)}-${pad(base.getDate())}T04:00:00`;
+  const end = new Date(aestMs + (dayOffset + 1) * 86400000);
+  const tdEnd = `${end.getFullYear()}-${pad(end.getMonth() + 1)}-${pad(end.getDate())}T04:00:00`;
+
+  const prices = allPrices.filter((p) => p.time >= tdStart && p.time < tdEnd);
+
+  const srmc = config.gasCostGJ * config.heatRate;
+
+  // Build ramp MW schedule from ramp rate (MW/min)
+  // Each minute adds rampRateMWMin to output until loadMW reached
+  const rampRate = config.rampRateMWMin;
+  const rampMinutes = Math.ceil(config.loadMW / rampRate);
+
+  // Compute MW output at each minute during ramp
+  function mwAtMinute(minFromStart: number): number {
+    return Math.min(rampRate * minFromStart, config.loadMW);
+  }
+
+  // Average MW over an interval starting at minuteOffset from start
+  function avgMWForInterval(minuteOffset: number, durationMin: number): number {
+    let sum = 0;
+    for (let m = 0; m < durationMin; m++) {
+      sum += mwAtMinute(minuteOffset + m + 1); // +1: end of each minute
+    }
+    return sum / durationMin;
+  }
+
+  function analyseStart(startIdx: number): StartAnalysis {
+    const intervals: StartInterval[] = [];
+    let cumBalance = -config.startCost;
+    let minuteOffset = 0;
+
+    for (let i = startIdx; i < prices.length; i++) {
+      const p = prices[i];
+      const dur = p.durationMin;
+      const hrs = dur / 60;
+
+      // During ramp, use average MW for this interval; after ramp, full load
+      const mw = minuteOffset >= rampMinutes ? config.loadMW : avgMWForInterval(minuteOffset, dur);
+
+      const gasCostInterval = mw * config.heatRate * config.gasCostGJ * hrs;
+      const revenue = mw * p.rrp * hrs;
+      const margin = revenue - gasCostInterval;
+
+      // Stop when price drops below SRMC (margin negative) and we've already recovered start cost
+      // or when margin is negative past the ramp (wouldn't start running at a loss)
+      if (margin < 0 && minuteOffset >= rampMinutes) break;
+
+      minuteOffset += dur;
+      cumBalance += margin;
+
+      intervals.push({
+        time: p.time,
+        rrp: p.rrp,
+        mw: Math.round(mw),
+        gasCostInterval,
+        revenue,
+        margin,
+        cumBalance,
+      });
+    }
+
+    const recoveryIdx = intervals.findIndex((iv) => iv.cumBalance > 0);
+    const recoveryTime = recoveryIdx >= 0 ? intervals[recoveryIdx].time : null;
+    let recoveryMinutes: number | null = null;
+    if (recoveryIdx >= 0) {
+      recoveryMinutes = 0;
+      for (let k = startIdx; k <= startIdx + recoveryIdx; k++) {
+        recoveryMinutes += prices[k].durationMin;
+      }
+    }
+
+    // Total run duration
+    let totalRunMinutes = 0;
+    for (let k = 0; k < intervals.length; k++) {
+      totalRunMinutes += prices[startIdx + k].durationMin;
+    }
+
+    const lastInterval = intervals[intervals.length - 1];
+
+    return {
+      startTime: prices[startIdx].time,
+      intervals,
+      recoveryTime,
+      recoveryMinutes,
+      finalBalance: lastInterval?.cumBalance ?? -config.startCost,
+      peakBalance: lastInterval?.cumBalance ?? -config.startCost,
+      optimalStopTime: lastInterval?.time ?? null,
+      optimalRunMinutes: intervals.length > 0 ? totalRunMinutes : null,
+      optimalProfit: lastInterval?.cumBalance ?? -config.startCost,
+    };
+  }
+
+  const analyses: StartAnalysis[] = [];
+  for (let i = 0; i < prices.length; i++) {
+    const a = analyseStart(i);
+    if (a.peakBalance > -config.startCost) {
+      analyses.push(a);
+    }
+  }
+
+  // Sort: best final balance first, recovered starts prioritised
+  analyses.sort((a, b) => {
+    if (a.recoveryTime && !b.recoveryTime) return -1;
+    if (!a.recoveryTime && b.recoveryTime) return 1;
+    if (a.recoveryTime && b.recoveryTime) {
+      return (a.recoveryMinutes ?? Infinity) - (b.recoveryMinutes ?? Infinity);
+    }
+    return b.finalBalance - a.finalBalance;
+  });
+
+  return {
+    config,
+    regionId,
+    srmc,
+    allPrices: prices.map((p) => ({ time: p.time, rrp: p.rrp })),
+    analyses: analyses.slice(0, 15),
+    bestStart: analyses.length > 0 ? analyses[0] : null,
+  };
+}

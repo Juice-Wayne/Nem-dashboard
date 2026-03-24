@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useEffect, useMemo, useCallback } from "react";
-import { Copy, Check, RefreshCw, Sun, Moon, Palette } from "lucide-react";
+import { Copy, Check, RefreshCw, Sun, Moon, BarChart3 } from "lucide-react";
+import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { useAutoRefresh } from "@/lib/hooks/use-auto-refresh";
 import { NemIntervalBar } from "@/components/nem-interval-bar";
@@ -264,7 +265,6 @@ export default function HomePage() {
   const [copiedReason, setCopiedReason] = useState(false);
   const [selectedRow, setSelectedRow] = useState<SelectedRow | null>(null);
   const [isDark, setIsDark] = useState(true);
-  const [isRainbow, setIsRainbow] = useState(false);
 
   useEffect(() => {
     const stored = localStorage.getItem("theme");
@@ -272,9 +272,6 @@ export default function HomePage() {
     setIsDark(dark);
     document.documentElement.classList.toggle("dark", dark);
     document.documentElement.classList.toggle("light", !dark);
-    const rainbow = localStorage.getItem("rainbow") === "true";
-    setIsRainbow(rainbow);
-    document.documentElement.classList.toggle("rainbow", rainbow);
   }, []);
 
   const toggleTheme = useCallback(() => {
@@ -283,15 +280,6 @@ export default function HomePage() {
       localStorage.setItem("theme", next ? "dark" : "light");
       document.documentElement.classList.toggle("dark", next);
       document.documentElement.classList.toggle("light", !next);
-      return next;
-    });
-  }, []);
-
-  const toggleRainbow = useCallback(() => {
-    setIsRainbow((prev) => {
-      const next = !prev;
-      localStorage.setItem("rainbow", String(next));
-      document.documentElement.classList.toggle("rainbow", next);
       return next;
     });
   }, []);
@@ -479,18 +467,13 @@ export default function HomePage() {
               >
                 {isDark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
               </button>
-              <button
-                onClick={toggleRainbow}
-                title="Toggle colourful mode"
-                className={cn(
-                  "flex items-center justify-center h-8 w-8 rounded-lg transition-all duration-150",
-                  isRainbow
-                    ? "text-purple-400 hover:bg-white/[0.04]"
-                    : "text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.04]",
-                )}
+              <Link
+                href="/analytics"
+                title="Analytics"
+                className="flex items-center justify-center h-8 w-8 rounded-lg text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.04] transition-all duration-150"
               >
-                <Palette className={cn("h-4 w-4", isRainbow && "animate-pulse")} />
-              </button>
+                <BarChart3 className="h-4 w-4" />
+              </Link>
             </div>
           </div>
         </div>
