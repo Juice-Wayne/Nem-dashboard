@@ -1,12 +1,17 @@
 "use client";
 
-import { useState, useEffect, useMemo, useCallback } from "react";
-import { Copy, Check, RefreshCw, Sun, Moon, BarChart3 } from "lucide-react";
-import Link from "next/link";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
+import { Copy, Check, RefreshCw, Sun, Moon } from "lucide-react";
+import useSWR from "swr";
 import { cn } from "@/lib/utils";
 import { useAutoRefresh } from "@/lib/hooks/use-auto-refresh";
 import { NemIntervalBar } from "@/components/nem-interval-bar";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  XAxis, YAxis, Tooltip, ResponsiveContainer,
+  Area, ReferenceLine,
+  ComposedChart,
+} from "recharts";
 import {
   Select,
   SelectContent,
@@ -158,7 +163,7 @@ const IC_OPTIONS = Object.entries(INTERCONNECTORS).map(([id, ic]) => ({
 
 type Direction = "all" | "increase" | "decrease";
 
-type TabId = "prices" | "demand" | "interconnectors" | "sensitivities" | "actuals";
+type TabId = "prices" | "demand" | "interconnectors" | "sensitivities" | "actuals" | "spikes" | "startcost";
 
 // --- Helpers ---
 
@@ -376,8 +381,10 @@ export default function HomePage() {
   const clearSelection = () => setSelectedRow(null);
 
   // Determine if we show region or interconnector selector
-  const showRegionSelector = activeTab !== "interconnectors";
+  const isAnalyticsTab = activeTab === "spikes" || activeTab === "startcost";
+  const showRegionSelector = !isAnalyticsTab && activeTab !== "interconnectors";
   const showInterconnectorSelector = activeTab === "interconnectors";
+  const showFilters = !isAnalyticsTab;
 
 
   return (
@@ -392,6 +399,8 @@ export default function HomePage() {
               <TabsTrigger value="interconnectors">Interconnectors</TabsTrigger>
               <TabsTrigger value="sensitivities">Sensitivities</TabsTrigger>
               <TabsTrigger value="actuals">Actuals vs 5PD</TabsTrigger>
+              <TabsTrigger value="spikes">Spikes</TabsTrigger>
+              <TabsTrigger value="startcost">BR Start</TabsTrigger>
             </TabsList>
             <button
               onClick={handleManualRefresh}
@@ -421,7 +430,7 @@ export default function HomePage() {
 
           {/* Filters */}
           <div className="flex items-center gap-2">
-            {showRegionSelector && (
+            {showFilters && showRegionSelector && (
               <Select value={region} onValueChange={(v) => { setRegion(v); setSelectedRow(null); }}>
                 <SelectTrigger className="w-24 h-8 text-xs">
                   <SelectValue />
@@ -433,7 +442,7 @@ export default function HomePage() {
                 </SelectContent>
               </Select>
             )}
-            {showInterconnectorSelector && (
+            {showFilters && showInterconnectorSelector && (
               <Select value={interconnector} onValueChange={(v) => { setInterconnector(v); setSelectedRow(null); }}>
                 <SelectTrigger className="w-36 h-8 text-xs">
                   <SelectValue />
@@ -446,7 +455,7 @@ export default function HomePage() {
                 </SelectContent>
               </Select>
             )}
-            {activeTab !== "actuals" && (
+            {showFilters && activeTab !== "actuals" && (
               <Select value={direction} onValueChange={(v) => { setDirection(v as Direction); setSelectedRow(null); }}>
                 <SelectTrigger className="w-28 h-8 text-xs">
                   <SelectValue />
@@ -458,7 +467,7 @@ export default function HomePage() {
                 </SelectContent>
               </Select>
             )}
-            {selectedRow && (
+            {showFilters && selectedRow && (
               <button
                 onClick={clearSelection}
                 className="px-2 py-1 text-xs rounded-md font-medium text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.04] transition-colors"
@@ -474,13 +483,6 @@ export default function HomePage() {
               >
                 {isDark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
               </button>
-              <Link
-                href="/analytics"
-                title="Analytics"
-                className="flex items-center justify-center h-8 w-8 rounded-lg text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.04] transition-all duration-150"
-              >
-                <BarChart3 className="h-4 w-4" />
-              </Link>
             </div>
           </div>
         </div>
@@ -494,18 +496,20 @@ export default function HomePage() {
         </div>
 
         {/* Rebid Reason Generator */}
-        <Card className="rounded-xl mt-4">
-          <CardContent className="py-3">
-            <div className="relative">
-              <div className="rounded-md border border-input bg-white/[0.03] p-3 pr-12 text-sm font-mono text-zinc-200 min-h-[60px] whitespace-pre-wrap break-words">
-                {generatedReason}
+        {showFilters && (
+          <Card className="rounded-xl mt-4">
+            <CardContent className="py-3">
+              <div className="relative">
+                <div className="rounded-md border border-input bg-white/[0.03] p-3 pr-12 text-sm font-mono text-zinc-200 min-h-[60px] whitespace-pre-wrap break-words">
+                  {generatedReason}
+                </div>
+                <Button variant="ghost" size="icon-sm" className="absolute top-2 right-2" onClick={handleCopyReason}>
+                  {copiedReason ? <Check className="h-4 w-4 text-emerald-400" /> : <Copy className="h-4 w-4" />}
+                </Button>
               </div>
-              <Button variant="ghost" size="icon-sm" className="absolute top-2 right-2" onClick={handleCopyReason}>
-                {copiedReason ? <Check className="h-4 w-4 text-emerald-400" /> : <Copy className="h-4 w-4" />}
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
+        )}
 
         {/* === PRICES TAB === */}
         <TabsContent value="prices">
@@ -566,6 +570,16 @@ export default function HomePage() {
             selectedRow={selectedRow}
             onSelect={setSelectedRow}
           />
+        </TabsContent>
+
+        {/* === PRICE SPIKES TAB === */}
+        <TabsContent value="spikes">
+          <SpikesTab />
+        </TabsContent>
+
+        {/* === BR START TAB === */}
+        <TabsContent value="startcost">
+          <StartCostTab />
         </TabsContent>
       </Tabs>
     </div>
@@ -1325,6 +1339,674 @@ function ActualsTables({
           ) : <LoadingState />}
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+// ============================================================
+// SWR fetcher for analytics tabs
+// ============================================================
+
+const analyticsFetcher = async (url: string) => {
+  const res = await fetch(url, { cache: "no-store" });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+};
+
+function shortDateTime(iso: string): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  return d.toLocaleString("en-AU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: false });
+}
+
+function shortTime(iso: string): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  return d.toLocaleTimeString("en-AU", { hour: "2-digit", minute: "2-digit", hour12: false });
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function ChartTip({ active, payload, label }: any) {
+  if (!active || !payload?.length) return null;
+  return (
+    <div className="rounded border border-zinc-700/80 bg-zinc-900/95 px-2.5 py-1.5 text-[11px] shadow-lg backdrop-blur-sm">
+      <p className="text-zinc-500 mb-0.5">{label}</p>
+      {payload.map((p: { name: string; value: number; color: string }, i: number) => (
+        <p key={i} style={{ color: p.color }} className="leading-tight">
+          {p.name}: <span className="font-mono font-semibold">{typeof p.value === "number" ? p.value.toFixed(1) : p.value}</span>
+        </p>
+      ))}
+    </div>
+  );
+}
+
+// ============================================================
+// Price Spike Lookback
+// ============================================================
+
+interface SpikeRow {
+  INTERVAL_DATETIME: string;
+  REGIONID: string;
+  RRP: number;
+  SEVERITY: "extreme" | "high" | "negative";
+  BINDING_CONSTRAINTS: { CONSTRAINTID: string; MARGINALVALUE: number }[];
+}
+
+const SEVERITY_STYLES: Record<string, { bg: string; text: string; label: string }> = {
+  extreme:  { bg: "bg-red-500/15",    text: "text-red-400",     label: "EXTREME (>$1,000)" },
+  high:     { bg: "bg-orange-500/15", text: "text-orange-400",  label: "HIGH (>$300)" },
+  negative: { bg: "bg-cyan-500/15",   text: "text-cyan-400",    label: "NEGATIVE (\u2264-$30)" },
+};
+
+const LOOKBACK_OPTIONS = [
+  { hours: 24, label: "24h" },
+  { hours: 72, label: "3d" },
+  { hours: 168, label: "7d" },
+] as const;
+
+function SpikesTab() {
+  const [hours, setHours] = useState<number>(24);
+  const [regionFilter, setRegionFilter] = useState("ALL");
+  const [severityFilter, setSeverityFilter] = useState("ALL");
+  const { data, error, isLoading, isValidating, mutate } = useSWR(`/api/analytics?tab=spikes&hours=${hours}`, analyticsFetcher, { refreshInterval: 30000 });
+
+  const regions = useMemo(() => {
+    if (!data?.spikes) return [];
+    return [...new Set((data.spikes as SpikeRow[]).map((s) => s.REGIONID))].sort();
+  }, [data]);
+
+  const filtered = useMemo(() => {
+    if (!data?.spikes) return [];
+    let rows = data.spikes as SpikeRow[];
+    if (regionFilter !== "ALL") {
+      rows = rows.filter((s) => s.REGIONID === regionFilter);
+    }
+    if (severityFilter !== "ALL") {
+      rows = rows.filter((s) => s.SEVERITY === severityFilter);
+    }
+    return rows;
+  }, [data, regionFilter, severityFilter]);
+
+  const summary = useMemo(() => {
+    if (!data?.spikes) return { extreme: 0, high: 0, negative: 0, total: 0 };
+    const spikes = data.spikes as SpikeRow[];
+    return {
+      extreme: spikes.filter((s) => s.SEVERITY === "extreme").length,
+      high: spikes.filter((s) => s.SEVERITY === "high").length,
+      negative: spikes.filter((s) => s.SEVERITY === "negative").length,
+      total: spikes.length,
+    };
+  }, [data]);
+
+  if (error) return <div className="h-24 flex items-center justify-center text-red-400 text-sm">Failed to load spikes</div>;
+  if (!data) return <div className="h-24 flex items-center justify-center text-zinc-500 text-sm animate-pulse">Loading spikes...</div>;
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-sm font-semibold">Price Spike Lookback</span>
+        <div className="flex items-center gap-1 ml-2">
+          {LOOKBACK_OPTIONS.map((opt) => (
+            <button
+              key={opt.hours}
+              onClick={() => setHours(opt.hours)}
+              className={`px-2 py-1 text-[10px] rounded font-medium transition-colors ${hours === opt.hours ? "bg-blue-500/15 text-blue-400" : "text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.04]"}`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+        {isLoading && <span className="text-[10px] text-zinc-600 animate-pulse">loading...</span>}
+        <div className="flex items-center gap-2 ml-auto">
+          <span className="text-[10px] text-zinc-600">{hours * 12} dispatch intervals</span>
+          <button
+            onClick={() => mutate()}
+            disabled={isValidating}
+            className="p-1 rounded hover:bg-white/[0.06] text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
+            title="Refresh"
+          >
+            <RefreshCw size={12} className={isValidating ? "animate-spin" : ""} />
+          </button>
+        </div>
+      </div>
+
+      <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => setRegionFilter("ALL")}
+            className={`px-2 py-1 text-[10px] rounded font-medium transition-colors ${regionFilter === "ALL" ? "bg-blue-500/15 text-blue-400" : "text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.04]"}`}
+          >
+            All regions
+          </button>
+          {regions.map((r) => (
+            <button
+              key={r}
+              onClick={() => setRegionFilter(r)}
+              className={`px-2 py-1 text-[10px] rounded font-medium transition-colors ${regionFilter === r ? "bg-blue-500/15 text-blue-400" : "text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.04]"}`}
+            >
+              {r.replace("1", "")}
+            </button>
+          ))}
+        </div>
+
+        <span className="text-zinc-700">|</span>
+
+        <div className="flex items-center gap-1">
+          {[
+            { key: "ALL", label: `All (${summary.total})` },
+            ...(summary.extreme > 0 ? [{ key: "extreme", label: `Extreme (${summary.extreme})` }] : []),
+            ...(summary.high > 0 ? [{ key: "high", label: `High (${summary.high})` }] : []),
+            ...(summary.negative > 0 ? [{ key: "negative", label: `Negative (${summary.negative})` }] : []),
+          ].map((s) => (
+            <button
+              key={s.key}
+              onClick={() => setSeverityFilter(s.key)}
+              className={`px-2 py-1 text-[10px] rounded font-medium transition-colors ${severityFilter === s.key ? "bg-blue-500/15 text-blue-400" : "text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.04]"}`}
+            >
+              {s.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {filtered.length === 0 && (
+        <p className="text-zinc-500 text-sm p-4">No price spikes detected</p>
+      )}
+
+      {filtered.length > 0 && (
+        <div className="space-y-2">
+          {filtered.map((s, i) => {
+            const style = SEVERITY_STYLES[s.SEVERITY];
+            return (
+              <Card key={`${s.INTERVAL_DATETIME}-${s.REGIONID}-${i}`} className="rounded-xl">
+                <CardContent className="px-4 py-3">
+                  <div className="flex items-start gap-4">
+                    <div className="flex-shrink-0 text-right w-20">
+                      <p className="text-[10px] text-zinc-500">{shortDateTime(s.INTERVAL_DATETIME)}</p>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className={`text-[9px] px-1.5 py-0.5 rounded font-semibold ${style.bg} ${style.text}`}>
+                          {style.label}
+                        </span>
+                        <span className="font-mono text-sm font-semibold text-zinc-200">
+                          {s.REGIONID.replace("1", "")}
+                        </span>
+                        <span className={`font-mono text-sm font-bold ${style.text}`}>
+                          ${s.RRP.toFixed(2)}/MWh
+                        </span>
+                      </div>
+                      {s.BINDING_CONSTRAINTS.length > 0 && (
+                        <div className="mt-2">
+                          <p className="text-[9px] text-zinc-600 uppercase tracking-wide mb-1">Likely cause — binding constraints</p>
+                          <div className="flex flex-wrap gap-1">
+                            {s.BINDING_CONSTRAINTS.map((c, ci) => (
+                              <span
+                                key={ci}
+                                className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-zinc-800/80 text-zinc-400"
+                                title={`MV: $${c.MARGINALVALUE.toFixed(2)}/MWh`}
+                              >
+                                {c.CONSTRAINTID.length > 35 ? c.CONSTRAINTID.slice(0, 33) + "\u2026" : c.CONSTRAINTID}
+                                <span className="ml-1 text-zinc-600">${c.MARGINALVALUE.toFixed(0)}</span>
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {s.BINDING_CONSTRAINTS.length === 0 && (
+                        <p className="text-[9px] text-zinc-600 mt-1">No binding constraints at this interval</p>
+                      )}
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
+// BR Start Cost Analysis
+// ============================================================
+
+interface StartIntervalRow {
+  time: string;
+  rrp: number;
+  mw: number;
+  gasCostInterval: number;
+  revenue: number;
+  margin: number;
+  cumBalance: number;
+}
+
+interface StartAnalysisRow {
+  startTime: string;
+  intervals: StartIntervalRow[];
+  recoveryTime: string | null;
+  recoveryMinutes: number | null;
+  finalBalance: number;
+  peakBalance: number;
+  optimalStopTime: string | null;
+  optimalRunMinutes: number | null;
+  optimalProfit: number;
+}
+
+interface StartCostData {
+  config: { gasCostGJ: number; startCost: number; loadMW: number; heatRate: number; rampRateMWMin: number };
+  regionId: string;
+  srmc: number;
+  allPrices: { time: string; rrp: number }[];
+  analyses: StartAnalysisRow[];
+  bestStart: StartAnalysisRow | null;
+  sensScenario?: number;
+  sensLabel?: string;
+}
+
+const QLD_SENS_SCENARIOS = [
+  { rrpeep: 29, label: "QLD +100 MW" },
+  { rrpeep: 30, label: "QLD -100 MW" },
+  { rrpeep: 31, label: "QLD +200 MW" },
+  { rrpeep: 32, label: "QLD -200 MW" },
+  { rrpeep: 33, label: "QLD +500 MW" },
+  { rrpeep: 34, label: "QLD -500 MW" },
+];
+
+const BR_DEFAULTS = {
+  gasCostGJ: 11.5,
+  startCost: 35000,
+  loadMW: 170,
+  heatRate: 10.4,
+  rampRate: 11,
+};
+
+function ConfigInput({ label, unit, value, onChange, width }: { label: string; unit: string; value: string | number; onChange: (v: string) => void; width?: string }) {
+  return (
+    <div className="flex items-center gap-1.5">
+      <label className="text-[10px] text-zinc-500 whitespace-nowrap">{label}</label>
+      <div className="flex items-center gap-0.5">
+        <input
+          type="text"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className={`${width ?? "w-20"} bg-zinc-100 dark:bg-zinc-800/80 border border-zinc-300 dark:border-zinc-700/50 rounded px-1.5 py-0.5 text-[11px] font-mono text-zinc-800 dark:text-zinc-200 focus:outline-none focus:border-blue-500/50`}
+        />
+        <span className="text-[9px] text-zinc-600">{unit}</span>
+      </div>
+    </div>
+  );
+}
+
+const BR_STORAGE_KEY = "nem-br-config";
+
+function loadBRConfig(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem(BR_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch { return {}; }
+}
+
+function saveBRConfig(cfg: Record<string, string>) {
+  try { localStorage.setItem(BR_STORAGE_KEY, JSON.stringify(cfg)); } catch { /* noop */ }
+}
+
+function usePersistentConfig(key: string, fallback: string): [string, (v: string) => void] {
+  const [val, setVal] = useState(() => {
+    const saved = loadBRConfig()[key];
+    return saved !== undefined ? saved : fallback;
+  });
+  const update = useCallback((v: string) => {
+    setVal(v);
+    const cfg = loadBRConfig();
+    cfg[key] = v;
+    saveBRConfig(cfg);
+  }, [key]);
+  return [val, update];
+}
+
+function StartCostTab() {
+  const [gasCostGJ, setGasCostGJ] = usePersistentConfig("gasCostGJ", String(BR_DEFAULTS.gasCostGJ));
+  const [startCost, setStartCost] = usePersistentConfig("startCost", String(BR_DEFAULTS.startCost));
+  const [loadMW, setLoadMW] = usePersistentConfig("loadMW", String(BR_DEFAULTS.loadMW));
+  const [heatRate, setHeatRate] = usePersistentConfig("heatRate", String(BR_DEFAULTS.heatRate));
+  const [rampRate, setRampRate] = usePersistentConfig("rampRate", String(BR_DEFAULTS.rampRate));
+  const [tradingDay, setTradingDay] = useState<"today" | "d+1">("today");
+  const [sensScenario, setSensScenario] = useState<number | 0>(0);
+  const [selectedStart, setSelectedStart] = useState<number>(0);
+  const [expandedStart, setExpandedStart] = useState<number | null>(null);
+  const [showUnprofitable, setShowUnprofitable] = useState(false);
+
+  const apiUrl = useMemo(() => {
+    const params = new URLSearchParams({
+      tab: "startcost",
+      region: "QLD1",
+      gasCostGJ,
+      startCost,
+      loadMW,
+      heatRate,
+      rampRate,
+      day: tradingDay,
+    });
+    if (sensScenario) params.set("sensScenario", String(sensScenario));
+    return `/api/analytics?${params}`;
+  }, [gasCostGJ, startCost, loadMW, heatRate, rampRate, tradingDay, sensScenario]);
+
+  const { data, error, isValidating, mutate } = useSWR(apiUrl, analyticsFetcher, { refreshInterval: 30000 });
+
+  const result = data?.startcost as StartCostData | undefined;
+
+  const computedSRMC = (Number(gasCostGJ) || 0) * (Number(heatRate) || 0);
+
+  const filteredAnalyses = useMemo(() => {
+    if (!result?.analyses) return [];
+    if (showUnprofitable) return result.analyses;
+    return result.analyses.filter((a) => a.optimalProfit > 0);
+  }, [result?.analyses, showUnprofitable]);
+
+  const unprofitableCount = (result?.analyses?.length ?? 0) - filteredAnalyses.length;
+
+  const selected = filteredAnalyses[selectedStart] ?? null;
+
+  const chartData = useMemo(() => {
+    if (!result?.allPrices) return [];
+    const mwMap = new Map<string, number>();
+    if (selected) {
+      for (const iv of selected.intervals) {
+        mwMap.set(iv.time, iv.mw);
+      }
+    }
+    return result.allPrices.map((p) => ({
+      time: p.time,
+      rrp: p.rrp,
+      mw: mwMap.get(p.time) ?? null,
+    }));
+  }, [result?.allPrices, selected]);
+
+  useEffect(() => {
+    if (result?.analyses && selectedStart >= result.analyses.length) {
+      setSelectedStart(0);
+    }
+  }, [result?.analyses, selectedStart]);
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-sm font-semibold">BR Start Profitability</span>
+        <span className="text-[10px] text-zinc-500">QLD1</span>
+        <div className="flex items-center gap-1 ml-2">
+          {(["today", "d+1"] as const).map((d) => (
+            <button
+              key={d}
+              onClick={() => { setTradingDay(d); setSelectedStart(0); setExpandedStart(null); }}
+              className={`px-2 py-1 text-[10px] rounded font-medium transition-colors ${tradingDay === d ? "bg-blue-500/15 text-blue-400" : "text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.04]"}`}
+            >
+              {d === "today" ? "Today" : "D+1"}
+            </button>
+          ))}
+        </div>
+        <div className="flex items-center gap-1 ml-2">
+          <span className="text-[10px] text-zinc-500">Price:</span>
+          <select
+            value={sensScenario}
+            onChange={(e) => { setSensScenario(Number(e.target.value)); setSelectedStart(0); setExpandedStart(null); }}
+            className="bg-zinc-100 dark:bg-zinc-800/80 border border-zinc-300 dark:border-zinc-700/50 rounded px-1.5 py-0.5 text-[10px] font-mono text-zinc-800 dark:text-zinc-200 focus:outline-none focus:border-blue-500/50"
+          >
+            <option value={0}>Base RRP</option>
+            {QLD_SENS_SCENARIOS.map((s) => (
+              <option key={s.rrpeep} value={s.rrpeep}>{s.label}</option>
+            ))}
+          </select>
+        </div>
+        <div className="flex items-center gap-2 ml-auto">
+          <span className="text-[10px] text-zinc-600">
+            {result?.allPrices?.length ?? 0} intervals {sensScenario ? "(30min PD sensitivity)" : "(5min P5MIN + 30min PD)"}
+          </span>
+          <button
+            onClick={() => mutate()}
+            disabled={isValidating}
+            className="p-1 rounded hover:bg-white/[0.06] text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
+            title="Refresh"
+          >
+            <RefreshCw size={12} className={isValidating ? "animate-spin" : ""} />
+          </button>
+        </div>
+      </div>
+
+      <Card>
+        <CardContent className="p-3">
+          <div className="flex items-center gap-4 flex-wrap">
+            <ConfigInput label="Gas" unit="$/GJ" value={gasCostGJ} onChange={setGasCostGJ} />
+            <ConfigInput label="Heat Rate" unit="GJ/MWh" value={heatRate} onChange={setHeatRate} />
+            <ConfigInput label="Load" unit="MW" value={loadMW} onChange={setLoadMW} />
+            <ConfigInput label="Start Cost" unit="$" value={startCost} onChange={setStartCost} />
+            <ConfigInput label="Ramp Rate" unit="MW/min" value={rampRate} onChange={setRampRate} />
+            <div className="flex items-center gap-1.5 ml-auto">
+              <span className="text-[10px] text-zinc-500">SRMC:</span>
+              <span className="text-[11px] font-mono font-semibold text-blue-400">${computedSRMC.toFixed(2)}/MWh</span>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {error && <div className="h-24 flex items-center justify-center text-red-400 text-sm">Failed to load start analysis</div>}
+      {!data && !error && <div className="h-24 flex items-center justify-center text-zinc-500 text-sm animate-pulse">Loading start analysis...</div>}
+
+      {selected && (
+        <Card>
+          <CardContent className="p-3">
+            <div className="flex items-center gap-4 flex-wrap text-[11px]">
+              {sensScenario > 0 && (
+                <span className="px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-400 text-[9px] font-medium">
+                  {QLD_SENS_SCENARIOS.find(s => s.rrpeep === sensScenario)?.label ?? `RRPEEP${sensScenario}`}
+                </span>
+              )}
+              <div>
+                <span className="text-zinc-500">Start: </span>
+                <span className="font-mono font-semibold text-blue-400">{shortDateTime(selected.startTime)}</span>
+              </div>
+              {selected.optimalStopTime && (
+                <div>
+                  <span className="text-zinc-500">Optimal off: </span>
+                  <span className="font-mono font-semibold text-amber-400">{shortDateTime(selected.optimalStopTime)}</span>
+                </div>
+              )}
+              {selected.optimalRunMinutes != null && (
+                <div>
+                  <span className="text-zinc-500">Run: </span>
+                  <span className="font-mono font-semibold">{selected.optimalRunMinutes >= 60 ? `${(selected.optimalRunMinutes / 60).toFixed(1)}h` : `${selected.optimalRunMinutes}min`}</span>
+                </div>
+              )}
+              <div>
+                <span className="text-zinc-500">Max profit: </span>
+                <span className={`font-mono font-semibold ${selected.optimalProfit > 0 ? "text-emerald-400" : "text-red-400"}`}>
+                  {selected.optimalProfit > 0 ? "+" : ""}${selected.optimalProfit.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                </span>
+              </div>
+              {selected.recoveryMinutes != null && (
+                <div>
+                  <span className="text-zinc-500">Recovers in: </span>
+                  <span className="font-mono font-semibold text-emerald-400">{selected.recoveryMinutes}min</span>
+                </div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {chartData.length > 0 && (
+        <Card>
+          <CardContent className="p-3">
+            <div className="flex items-center gap-3 mb-2">
+              <p className="text-[10px] text-zinc-500">
+                QLD1 Price Forecast {sensScenario ? `(PD Sensitivity: ${QLD_SENS_SCENARIOS.find(s => s.rrpeep === sensScenario)?.label ?? `RRPEEP${sensScenario}`})` : "(P5MIN + PD)"} — SRMC ${(result?.srmc ?? computedSRMC).toFixed(2)}/MWh
+              </p>
+            </div>
+            <ResponsiveContainer width="100%" height={220}>
+              <ComposedChart data={chartData}>
+                <XAxis
+                  dataKey="time"
+                  tick={{ fontSize: 9, fill: "#71717a" }}
+                  tickFormatter={shortTime}
+                  interval="preserveStartEnd"
+                />
+                <YAxis
+                  yAxisId="price"
+                  tick={{ fontSize: 9, fill: "#71717a" }}
+                  tickFormatter={(v: number) => `$${v}`}
+                  width={50}
+                />
+                <YAxis
+                  yAxisId="mw"
+                  orientation="right"
+                  tick={{ fontSize: 9, fill: "#71717a" }}
+                  tickFormatter={(v: number) => `${v}`}
+                  width={40}
+                  domain={[0, (Number(loadMW) || 170) * 1.2]}
+                  label={{ value: "MW", angle: 90, position: "insideRight", style: { fontSize: 9, fill: "#52525b" } }}
+                />
+                <Tooltip content={<ChartTip />} />
+                <ReferenceLine yAxisId="price" y={computedSRMC} stroke="#3b82f6" strokeDasharray="4 4" strokeOpacity={0.4} />
+                <Area
+                  yAxisId="price"
+                  type="stepAfter"
+                  dataKey="rrp"
+                  name="RRP"
+                  stroke="#3b82f6"
+                  fill="#3b82f6"
+                  fillOpacity={0.1}
+                  strokeWidth={1.5}
+                />
+                <Area
+                  yAxisId="mw"
+                  type="stepAfter"
+                  dataKey="mw"
+                  name="MW"
+                  stroke="#f59e0b"
+                  fill="#f59e0b"
+                  fillOpacity={0.15}
+                  strokeWidth={2}
+                  connectNulls={false}
+                />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
+      )}
+
+      {result && (
+        <Card>
+          <CardContent className="p-3">
+            <div className="flex items-center gap-3 mb-2">
+              {unprofitableCount > 0 && (
+                <button
+                  onClick={() => { setShowUnprofitable(!showUnprofitable); setSelectedStart(0); }}
+                  className="text-[10px] text-zinc-500 hover:text-zinc-300 transition-colors ml-auto"
+                >
+                  {showUnprofitable ? "Hide" : "Show"} {unprofitableCount} unprofitable
+                </button>
+              )}
+            </div>
+
+            {filteredAnalyses.length > 0 ? (
+              <div className="space-y-0">
+                <table className="w-full text-[11px]">
+                  <thead>
+                    <tr className="text-zinc-500 border-b border-zinc-800">
+                      <th className="text-left py-1 pr-2 font-medium">Start</th>
+                      <th className="text-left py-1 pr-2 font-medium">Off</th>
+                      <th className="text-right py-1 pr-2 font-medium">Run</th>
+                      <th className="text-right py-1 pr-2 font-medium">Recovery</th>
+                      <th className="text-right py-1 font-medium">Profit</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredAnalyses.map((a, i) => (
+                      <React.Fragment key={i}>
+                        <tr
+                          onClick={() => { setSelectedStart(i); setExpandedStart(expandedStart === i ? null : i); }}
+                          className={`border-b border-zinc-800/50 cursor-pointer transition-colors ${
+                            selectedStart === i ? "bg-blue-500/10" : ""
+                          } ${
+                            a.recoveryTime
+                              ? "hover:bg-emerald-500/5"
+                              : "hover:bg-zinc-800/30"
+                          }`}
+                        >
+                          <td className="py-1 pr-2 font-mono">{shortDateTime(a.startTime)}</td>
+                          <td className="py-1 pr-2 font-mono text-amber-400/80">
+                            {a.optimalStopTime ? shortTime(a.optimalStopTime) : "\u2014"}
+                          </td>
+                          <td className="py-1 pr-2 text-right font-mono">
+                            {a.optimalRunMinutes != null
+                              ? a.optimalRunMinutes >= 60
+                                ? `${(a.optimalRunMinutes / 60).toFixed(1)}h`
+                                : `${a.optimalRunMinutes}m`
+                              : "\u2014"}
+                          </td>
+                          <td className={`py-1 pr-2 text-right font-mono ${a.recoveryMinutes ? "text-emerald-400" : "text-zinc-600"}`}>
+                            {a.recoveryMinutes ? `${a.recoveryMinutes}m` : "\u2014"}
+                          </td>
+                          <td className={`py-1 text-right font-mono font-semibold ${a.optimalProfit > 0 ? "text-emerald-400" : "text-red-400"}`}>
+                            {a.optimalProfit > 0 ? "+" : ""}${a.optimalProfit.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                          </td>
+                        </tr>
+                        {expandedStart === i && (
+                          <tr key={`detail-${i}`}>
+                            <td colSpan={5} className="p-0">
+                              <div className="bg-zinc-900/50 border-y border-zinc-800/50">
+                                <div className="max-h-48 overflow-y-auto px-3 py-2">
+                                  <table className="w-full text-[10px]">
+                                    <thead>
+                                      <tr className="text-zinc-600">
+                                        <th className="text-left py-0.5 pr-2">Time</th>
+                                        <th className="text-right py-0.5 pr-2">MW</th>
+                                        <th className="text-right py-0.5 pr-2">Price</th>
+                                        <th className="text-right py-0.5 pr-2">Revenue</th>
+                                        <th className="text-right py-0.5 pr-2">Gas Cost</th>
+                                        <th className="text-right py-0.5 pr-2">Margin</th>
+                                        <th className="text-right py-0.5">Balance</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {a.intervals.map((iv, j) => (
+                                        <tr key={j} className={`border-t border-zinc-800/30 ${iv.cumBalance > 0 ? "text-emerald-400/80" : ""}`}>
+                                          <td className="py-0.5 pr-2 font-mono">{shortTime(iv.time)}</td>
+                                          <td className="py-0.5 pr-2 text-right font-mono">{iv.mw}</td>
+                                          <td className="py-0.5 pr-2 text-right font-mono">${iv.rrp.toFixed(2)}</td>
+                                          <td className="py-0.5 pr-2 text-right font-mono">${iv.revenue.toFixed(0)}</td>
+                                          <td className="py-0.5 pr-2 text-right font-mono text-zinc-500">${iv.gasCostInterval.toFixed(0)}</td>
+                                          <td className={`py-0.5 pr-2 text-right font-mono ${iv.margin > 0 ? "text-emerald-400/70" : "text-red-400/70"}`}>
+                                            {iv.margin > 0 ? "+" : ""}${iv.margin.toFixed(0)}
+                                          </td>
+                                          <td className={`py-0.5 text-right font-mono font-semibold ${iv.cumBalance > 0 ? "text-emerald-400" : "text-red-400"}`}>
+                                            ${iv.cumBalance.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                                          </td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="text-[10px] text-zinc-600">
+                No profitable starts {tradingDay === "d+1" ? "for D+1" : "today"}{sensScenario ? ` using ${QLD_SENS_SCENARIOS.find(s => s.rrpeep === sensScenario)?.label ?? "sensitivity"} prices` : ""} (SRMC ${(result.srmc ?? computedSRMC).toFixed(2)}/MWh).
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }
