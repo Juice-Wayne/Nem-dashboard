@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useMemo, useCallback } from "react";
-import { ArrowLeft, Search, Copy, Check, Sun, Moon } from "lucide-react";
+import { ArrowLeft, Search, Copy, Check, Sun, Moon, RefreshCw } from "lucide-react";
 import Link from "next/link";
 import useSWR from "swr";
 import { Card, CardContent } from "@/components/ui/card";
@@ -67,7 +67,7 @@ function RebidsTab() {
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<"ALL" | "ENERGY" | "FCAS">("ENERGY");
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
-  const { data, error } = useSWR("/api/analytics?tab=rebids", fetcher, { refreshInterval: 15000 });
+  const { data, error, isValidating, mutate } = useSWR("/api/analytics?tab=rebids", fetcher, { refreshInterval: 15000 });
 
   const { filtered, counts } = useMemo(() => {
     if (!data?.rebids) return { filtered: [] as RebidRow[], counts: { total: 0, energy: 0, fcas: 0 } };
@@ -92,8 +92,8 @@ function RebidsTab() {
     setTimeout(() => setCopiedIdx(null), 1500);
   }, []);
 
-  if (error) return <p className="text-red-400 text-sm p-4">Failed to load</p>;
-  if (!data) return <p className="text-zinc-500 text-sm p-4">Loading...</p>;
+  if (error) return <div className="h-24 flex items-center justify-center text-red-400 text-sm">Failed to load rebids</div>;
+  if (!data) return <div className="h-24 flex items-center justify-center text-zinc-500 text-sm animate-pulse">Loading rebids...</div>;
 
   return (
     <div className="space-y-3">
@@ -120,7 +120,17 @@ function RebidsTab() {
             </button>
           ))}
         </div>
-        <span className="text-[10px] text-zinc-600 ml-auto">{filtered.length} shown</span>
+        <div className="flex items-center gap-2 ml-auto">
+          <span className="text-[10px] text-zinc-600">{filtered.length} shown</span>
+          <button
+            onClick={() => mutate()}
+            disabled={isValidating}
+            className="p-1 rounded hover:bg-white/[0.06] text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
+            title="Refresh"
+          >
+            <RefreshCw size={12} className={isValidating ? "animate-spin" : ""} />
+          </button>
+        </div>
       </div>
 
       {/* Table */}
@@ -255,7 +265,7 @@ function SpikesTab() {
   const [hours, setHours] = useState<number>(24);
   const [regionFilter, setRegionFilter] = useState("ALL");
   const [severityFilter, setSeverityFilter] = useState("ALL");
-  const { data, error, isLoading } = useSWR(`/api/analytics?tab=spikes&hours=${hours}`, fetcher, { refreshInterval: 30000 });
+  const { data, error, isLoading, isValidating, mutate } = useSWR(`/api/analytics?tab=spikes&hours=${hours}`, fetcher, { refreshInterval: 30000 });
 
   const regions = useMemo(() => {
     if (!data?.spikes) return [];
@@ -285,8 +295,8 @@ function SpikesTab() {
     };
   }, [data]);
 
-  if (error) return <p className="text-red-400 text-sm p-4">Failed to load</p>;
-  if (!data) return <p className="text-zinc-500 text-sm p-4">Loading...</p>;
+  if (error) return <div className="h-24 flex items-center justify-center text-red-400 text-sm">Failed to load spikes</div>;
+  if (!data) return <div className="h-24 flex items-center justify-center text-zinc-500 text-sm animate-pulse">Loading spikes...</div>;
 
   return (
     <div className="space-y-3">
@@ -305,7 +315,17 @@ function SpikesTab() {
           ))}
         </div>
         {isLoading && <span className="text-[10px] text-zinc-600 animate-pulse">loading...</span>}
-        <span className="text-[10px] text-zinc-600 ml-auto">{hours * 12} dispatch intervals</span>
+        <div className="flex items-center gap-2 ml-auto">
+          <span className="text-[10px] text-zinc-600">{hours * 12} dispatch intervals</span>
+          <button
+            onClick={() => mutate()}
+            disabled={isValidating}
+            className="p-1 rounded hover:bg-white/[0.06] text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
+            title="Refresh"
+          >
+            <RefreshCw size={12} className={isValidating ? "animate-spin" : ""} />
+          </button>
+        </div>
       </div>
 
       {/* Filters */}
@@ -447,7 +467,18 @@ interface StartCostData {
   allPrices: { time: string; rrp: number }[];
   analyses: StartAnalysisRow[];
   bestStart: StartAnalysisRow | null;
+  sensScenario?: number;
+  sensLabel?: string;
 }
+
+const QLD_SENS_SCENARIOS = [
+  { rrpeep: 29, label: "QLD +100 MW" },
+  { rrpeep: 30, label: "QLD -100 MW" },
+  { rrpeep: 31, label: "QLD +200 MW" },
+  { rrpeep: 32, label: "QLD -200 MW" },
+  { rrpeep: 33, label: "QLD +500 MW" },
+  { rrpeep: 34, label: "QLD -500 MW" },
+];
 
 const DEFAULTS = {
   gasCostGJ: 11.5,
@@ -474,13 +505,41 @@ function ConfigInput({ label, unit, value, onChange, width }: { label: string; u
   );
 }
 
+const BR_STORAGE_KEY = "nem-br-config";
+
+function loadBRConfig(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem(BR_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch { return {}; }
+}
+
+function saveBRConfig(cfg: Record<string, string>) {
+  try { localStorage.setItem(BR_STORAGE_KEY, JSON.stringify(cfg)); } catch { /* noop */ }
+}
+
+function usePersistentConfig(key: string, fallback: string): [string, (v: string) => void] {
+  const [val, setVal] = useState(() => {
+    const saved = loadBRConfig()[key];
+    return saved !== undefined ? saved : fallback;
+  });
+  const update = useCallback((v: string) => {
+    setVal(v);
+    const cfg = loadBRConfig();
+    cfg[key] = v;
+    saveBRConfig(cfg);
+  }, [key]);
+  return [val, update];
+}
+
 function StartCostTab() {
-  const [gasCostGJ, setGasCostGJ] = useState(String(DEFAULTS.gasCostGJ));
-  const [startCost, setStartCost] = useState(String(DEFAULTS.startCost));
-  const [loadMW, setLoadMW] = useState(String(DEFAULTS.loadMW));
-  const [heatRate, setHeatRate] = useState(String(DEFAULTS.heatRate));
-  const [rampRate, setRampRate] = useState(String(DEFAULTS.rampRate));
+  const [gasCostGJ, setGasCostGJ] = usePersistentConfig("gasCostGJ", String(DEFAULTS.gasCostGJ));
+  const [startCost, setStartCost] = usePersistentConfig("startCost", String(DEFAULTS.startCost));
+  const [loadMW, setLoadMW] = usePersistentConfig("loadMW", String(DEFAULTS.loadMW));
+  const [heatRate, setHeatRate] = usePersistentConfig("heatRate", String(DEFAULTS.heatRate));
+  const [rampRate, setRampRate] = usePersistentConfig("rampRate", String(DEFAULTS.rampRate));
   const [tradingDay, setTradingDay] = useState<"today" | "d+1">("today");
+  const [sensScenario, setSensScenario] = useState<number | 0>(0); // 0 = base prices
   const [selectedStart, setSelectedStart] = useState<number>(0);
   const [expandedStart, setExpandedStart] = useState<number | null>(null);
   const [showUnprofitable, setShowUnprofitable] = useState(false);
@@ -496,10 +555,11 @@ function StartCostTab() {
       rampRate,
       day: tradingDay,
     });
+    if (sensScenario) params.set("sensScenario", String(sensScenario));
     return `/api/analytics?${params}`;
-  }, [gasCostGJ, startCost, loadMW, heatRate, rampRate, tradingDay]);
+  }, [gasCostGJ, startCost, loadMW, heatRate, rampRate, tradingDay, sensScenario]);
 
-  const { data, error } = useSWR(apiUrl, fetcher, { refreshInterval: 30000 });
+  const { data, error, isValidating, mutate } = useSWR(apiUrl, fetcher, { refreshInterval: 30000 });
 
   const result = data?.startcost as StartCostData | undefined;
 
@@ -557,9 +617,32 @@ function StartCostTab() {
             </button>
           ))}
         </div>
-        <span className="text-[10px] text-zinc-600 ml-auto">
-          {result?.allPrices?.length ?? 0} intervals (5min P5MIN + 30min PD)
-        </span>
+        <div className="flex items-center gap-1 ml-2">
+          <span className="text-[10px] text-zinc-500">Price:</span>
+          <select
+            value={sensScenario}
+            onChange={(e) => { setSensScenario(Number(e.target.value)); setSelectedStart(0); setExpandedStart(null); }}
+            className="bg-zinc-100 dark:bg-zinc-800/80 border border-zinc-300 dark:border-zinc-700/50 rounded px-1.5 py-0.5 text-[10px] font-mono text-zinc-800 dark:text-zinc-200 focus:outline-none focus:border-blue-500/50"
+          >
+            <option value={0}>Base RRP</option>
+            {QLD_SENS_SCENARIOS.map((s) => (
+              <option key={s.rrpeep} value={s.rrpeep}>{s.label}</option>
+            ))}
+          </select>
+        </div>
+        <div className="flex items-center gap-2 ml-auto">
+          <span className="text-[10px] text-zinc-600">
+            {result?.allPrices?.length ?? 0} intervals {sensScenario ? "(30min PD sensitivity)" : "(5min P5MIN + 30min PD)"}
+          </span>
+          <button
+            onClick={() => mutate()}
+            disabled={isValidating}
+            className="p-1 rounded hover:bg-white/[0.06] text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
+            title="Refresh"
+          >
+            <RefreshCw size={12} className={isValidating ? "animate-spin" : ""} />
+          </button>
+        </div>
       </div>
 
       {/* Editable config */}
@@ -579,14 +662,19 @@ function StartCostTab() {
         </CardContent>
       </Card>
 
-      {error && <p className="text-red-400 text-sm">Failed to load</p>}
-      {!data && !error && <p className="text-zinc-500 text-sm">Loading...</p>}
+      {error && <div className="h-24 flex items-center justify-center text-red-400 text-sm">Failed to load start analysis</div>}
+      {!data && !error && <div className="h-24 flex items-center justify-center text-zinc-500 text-sm animate-pulse">Loading start analysis...</div>}
 
       {/* Best start summary */}
       {selected && (
         <Card>
           <CardContent className="p-3">
             <div className="flex items-center gap-4 flex-wrap text-[11px]">
+              {sensScenario > 0 && (
+                <span className="px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-400 text-[9px] font-medium">
+                  {QLD_SENS_SCENARIOS.find(s => s.rrpeep === sensScenario)?.label ?? `RRPEEP${sensScenario}`}
+                </span>
+              )}
               <div>
                 <span className="text-zinc-500">Start: </span>
                 <span className="font-mono font-semibold text-blue-400">{shortDateTime(selected.startTime)}</span>
@@ -626,7 +714,7 @@ function StartCostTab() {
           <CardContent className="p-3">
             <div className="flex items-center gap-3 mb-2">
               <p className="text-[10px] text-zinc-500">
-                QLD1 Price Forecast (P5MIN + PD) — SRMC ${(result?.srmc ?? computedSRMC).toFixed(2)}/MWh
+                QLD1 Price Forecast {sensScenario ? `(PD Sensitivity: ${QLD_SENS_SCENARIOS.find(s => s.rrpeep === sensScenario)?.label ?? `RRPEEP${sensScenario}`})` : "(P5MIN + PD)"} — SRMC ${(result?.srmc ?? computedSRMC).toFixed(2)}/MWh
               </p>
             </div>
             <ResponsiveContainer width="100%" height={220}>
@@ -688,10 +776,6 @@ function StartCostTab() {
         <Card>
           <CardContent className="p-3">
             <div className="flex items-center gap-3 mb-2">
-              <span className="text-sm font-semibold">Candidate Starts</span>
-              <span className="text-[10px] text-zinc-500">
-                {filteredAnalyses.length} profitable — click to overlay on chart
-              </span>
               {unprofitableCount > 0 && (
                 <button
                   onClick={() => { setShowUnprofitable(!showUnprofitable); setSelectedStart(0); }}
@@ -793,7 +877,7 @@ function StartCostTab() {
               </div>
             ) : (
               <p className="text-[10px] text-zinc-600">
-                No profitable starts {tradingDay === "d+1" ? "for D+1" : "today"} (SRMC ${(result.srmc ?? computedSRMC).toFixed(2)}/MWh).
+                No profitable starts {tradingDay === "d+1" ? "for D+1" : "today"}{sensScenario ? ` using ${QLD_SENS_SCENARIOS.find(s => s.rrpeep === sensScenario)?.label ?? "sensitivity"} prices` : ""} (SRMC ${(result.srmc ?? computedSRMC).toFixed(2)}/MWh).
               </p>
             )}
           </CardContent>
