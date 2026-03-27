@@ -1002,7 +1002,19 @@ export interface StartCostResult {
   allPrices: { time: string; rrp: number }[];
   analyses: StartAnalysis[]; // one per candidate start time
   bestStart: StartAnalysis | null;
+  sensScenario?: number;     // RRPEEP scenario number if using sensitivity prices
+  sensLabel?: string;        // human-readable label for the scenario
 }
+
+// QLD-relevant sensitivity scenarios for BR start analysis
+export const QLD_SENS_SCENARIOS: { rrpeep: number; label: string }[] = [
+  { rrpeep: 29, label: "QLD +100 MW" },
+  { rrpeep: 30, label: "QLD -100 MW" },
+  { rrpeep: 31, label: "QLD +200 MW" },
+  { rrpeep: 32, label: "QLD -200 MW" },
+  { rrpeep: 33, label: "QLD +500 MW" },
+  { rrpeep: 34, label: "QLD -500 MW" },
+];
 
 export const DEFAULT_START_COST_CONFIG: StartCostConfig = {
   gasCostGJ: 11.5,
@@ -1016,12 +1028,20 @@ export async function getStartCostAnalysis(
   regionId: string = "QLD1",
   config: StartCostConfig = DEFAULT_START_COST_CONFIG,
   tradingDay: "today" | "d+1" = "today",
+  sensScenario?: number, // RRPEEP scenario number (1-43) — uses sensitivity price instead of base RRP for 30-min PD
 ): Promise<StartCostResult> {
-  // Fetch both P5MIN (5-min intervals, ~1hr) and PD (30-min intervals, ~36hr)
-  const [[p5Current], [pdCurrent]] = await Promise.all([
+  // Fetch P5MIN + PD, and optionally sensitivities
+  const fetches: [Promise<Map<string, Record<string, string>[]>[]>, Promise<Map<string, Record<string, string>[]>[]>, Promise<Map<string, Record<string, string>[]>[]>?] = [
     fetchLatest(SOURCES.p5min),
     fetchLatest(SOURCES.predispatch),
-  ]);
+  ];
+  if (sensScenario) {
+    fetches.push(fetchLatest(SOURCES.sensitivities));
+  }
+  const results = await Promise.all(fetches.filter(Boolean) as Promise<Map<string, Record<string, string>[]>[]>[]);
+  const [p5Current] = results[0];
+  const [pdCurrent] = results[1];
+  const sensData = sensScenario && results[2] ? results[2][0] : null;
 
   // P5MIN prices — 5-minute granularity
   const p5Rows = getTable(p5Current, "REGIONSOLUTION");
@@ -1034,12 +1054,25 @@ export async function getStartCostAnalysis(
   p5Prices.sort((a, b) => a.time.localeCompare(b.time));
 
   // PD prices — 30-minute granularity
-  const pdRows = getTable(pdCurrent, "REGION_PRICES", "REGIONPRICE", "PRICE");
+  // When a sensitivity scenario is selected, use the RRPEEP price instead of base RRP
   const pdPrices: { time: string; rrp: number; durationMin: number }[] = [];
-  for (const r of pdRows) {
-    if (r.REGIONID !== regionId) continue;
-    const dt = normaliseDate(r.DATETIME || r.PERIODID || r.INTERVAL_DATETIME || "");
-    pdPrices.push({ time: dt, rrp: num(r.RRP), durationMin: 30 });
+  if (sensScenario && sensData) {
+    const sensRows = getTable(sensData, "PRICESENSITIVITIES", "PRICE_SENSITIVITY");
+    const col = `RRPEEP${sensScenario}`;
+    for (const r of sensRows) {
+      if (r.REGIONID !== regionId) continue;
+      const val = r[col];
+      if (val === undefined || val === "") continue;
+      const dt = normaliseDate(r.DATETIME || r.PERIODID || r.INTERVAL_DATETIME || "");
+      pdPrices.push({ time: dt, rrp: num(val), durationMin: 30 });
+    }
+  } else {
+    const pdRows = getTable(pdCurrent, "REGION_PRICES", "REGIONPRICE", "PRICE");
+    for (const r of pdRows) {
+      if (r.REGIONID !== regionId) continue;
+      const dt = normaliseDate(r.DATETIME || r.PERIODID || r.INTERVAL_DATETIME || "");
+      pdPrices.push({ time: dt, rrp: num(r.RRP), durationMin: 30 });
+    }
   }
   pdPrices.sort((a, b) => a.time.localeCompare(b.time));
 
@@ -1174,7 +1207,7 @@ export async function getStartCostAnalysis(
     return b.finalBalance - a.finalBalance;
   });
 
-  return {
+  const result: StartCostResult = {
     config,
     regionId,
     srmc,
@@ -1182,4 +1215,15 @@ export async function getStartCostAnalysis(
     analyses: analyses.slice(0, 15),
     bestStart: analyses.length > 0 ? analyses[0] : null,
   };
+
+  if (sensScenario) {
+    result.sensScenario = sensScenario;
+    const scenario = PD_SCENARIOS[sensScenario];
+    if (scenario) {
+      const sign = scenario.deltaMW > 0 ? "+" : "";
+      result.sensLabel = `${scenario.region.replace("1", "")} ${sign}${scenario.deltaMW} MW`;
+    }
+  }
+
+  return result;
 }

@@ -162,6 +162,13 @@ type TabId = "prices" | "demand" | "interconnectors" | "sensitivities" | "actual
 
 // --- Helpers ---
 
+/** Keyboard handler for clickable rows — triggers click on Enter/Space */
+function rowKeyHandler(handler: () => void) {
+  return (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handler(); }
+  };
+}
+
 function formatShortTime(date: string): string {
   const d = new Date(date);
   return d.toLocaleString("en-AU", {
@@ -391,7 +398,7 @@ export default function HomePage() {
               disabled={isRefreshing}
               title={
                 lastRefreshedAt
-                  ? `Last updated: ${lastRefreshedAt.toLocaleTimeString("en-AU", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false, timeZone: "Australia/Brisbane" })} AEST`
+                  ? `Last updated: ${lastRefreshedAt.toLocaleTimeString("en-AU", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false, timeZone: "Australia/Brisbane", timeZoneName: "short" })}`
                   : "Refresh data"
               }
               className={cn(
@@ -404,7 +411,7 @@ export default function HomePage() {
             </button>
           </div>
 
-          {/* NEM Interval countdown + current prices — absolutely centered */}
+          {/* NEM Interval countdown + current prices — absolutely centered on lg, below tabs on md */}
           <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-auto z-10 hidden lg:block">
             <NemIntervalBar
               regionPrices={regionPrices}
@@ -476,6 +483,14 @@ export default function HomePage() {
               </Link>
             </div>
           </div>
+        </div>
+
+        {/* NEM Interval bar — mobile/tablet (below lg) */}
+        <div className="lg:hidden mt-3">
+          <NemIntervalBar
+            regionPrices={regionPrices}
+            lastRefreshedAt={lastRefreshedAt}
+          />
         </div>
 
         {/* Rebid Reason Generator */}
@@ -642,7 +657,7 @@ function PricesTables({
                       const tk = getTimeKey(row);
                       const sel = selectedRow?.source === "5PD" && selectedRow?.timeKey === tk;
                       return (
-                        <TableRow key={`${tk}-${idx}`} className={`cursor-pointer transition-colors ${sel ? "bg-emerald-500/10" : ""}`} onClick={() => handleSelect("5PD", row)}>
+                        <TableRow key={`${tk}-${idx}`} tabIndex={0} role="button" onKeyDown={rowKeyHandler(() => handleSelect("5PD", row))} className={`cursor-pointer transition-colors ${sel ? "bg-emerald-500/10" : ""}`} onClick={() => handleSelect("5PD", row)}>
                           <TableCell className="font-mono text-xs">{tk ? formatShortTime(tk) : "\u2014"}</TableCell>
                           <TableCell className="text-right font-mono tabular-nums text-sm text-zinc-500">{formatCurrency(row.PREVIOUS_RRP)}</TableCell>
                           <TableCell className="text-right font-mono tabular-nums text-sm text-zinc-200">{formatCurrency(row.CURRENT_RRP)}</TableCell>
@@ -685,7 +700,7 @@ function PricesTables({
                       const tk = getTimeKey(row);
                       const sel = selectedRow?.source === "30PD" && selectedRow?.timeKey === tk;
                       return (
-                        <TableRow key={`${tk}-${idx}`} className={`cursor-pointer transition-colors ${sel ? "bg-blue-500/10" : ""}`} onClick={() => handleSelect("30PD", row)}>
+                        <TableRow key={`${tk}-${idx}`} tabIndex={0} role="button" onKeyDown={rowKeyHandler(() => handleSelect("30PD", row))} className={`cursor-pointer transition-colors ${sel ? "bg-blue-500/10" : ""}`} onClick={() => handleSelect("30PD", row)}>
                           <TableCell className="font-mono text-xs">{tk ? formatShortTime(tk) : "\u2014"}</TableCell>
                           <TableCell className="text-right font-mono tabular-nums text-sm text-zinc-500">{formatCurrency(row.PREVIOUS_RRP)}</TableCell>
                           <TableCell className="text-right font-mono tabular-nums text-sm text-zinc-200">{formatCurrency(row.CURRENT_RRP)}</TableCell>
@@ -789,7 +804,7 @@ function DemandTables({
                       const tk = getTimeKey(row);
                       const sel = selectedRow?.source === "5PD" && selectedRow?.timeKey === tk;
                       return (
-                        <TableRow key={`${tk}-${idx}`} className={`cursor-pointer transition-colors ${sel ? "bg-emerald-500/10" : ""}`} onClick={() => handleSelect("5PD", row)}>
+                        <TableRow key={`${tk}-${idx}`} tabIndex={0} role="button" onKeyDown={rowKeyHandler(() => handleSelect("5PD", row))} className={`cursor-pointer transition-colors ${sel ? "bg-emerald-500/10" : ""}`} onClick={() => handleSelect("5PD", row)}>
                           <TableCell className="font-mono text-xs">{tk ? formatShortTime(tk) : "\u2014"}</TableCell>
                           <TableCell className="text-right font-mono tabular-nums text-sm text-zinc-500">{formatMW(row.PREVIOUS_TOTALDEMAND)}</TableCell>
                           <TableCell className="text-right font-mono tabular-nums text-sm text-zinc-200">{formatMW(row.CURRENT_TOTALDEMAND)}</TableCell>
@@ -832,7 +847,7 @@ function DemandTables({
                       const tk = getTimeKey(row);
                       const sel = selectedRow?.source === "30PD" && selectedRow?.timeKey === tk;
                       return (
-                        <TableRow key={`${tk}-${idx}`} className={`cursor-pointer transition-colors ${sel ? "bg-blue-500/10" : ""}`} onClick={() => handleSelect("30PD", row)}>
+                        <TableRow key={`${tk}-${idx}`} tabIndex={0} role="button" onKeyDown={rowKeyHandler(() => handleSelect("30PD", row))} className={`cursor-pointer transition-colors ${sel ? "bg-blue-500/10" : ""}`} onClick={() => handleSelect("30PD", row)}>
                           <TableCell className="font-mono text-xs">{tk ? formatShortTime(tk) : "\u2014"}</TableCell>
                           <TableCell className="text-right font-mono tabular-nums text-sm text-zinc-500">{formatMW(row.PREVIOUS_TOTALDEMAND)}</TableCell>
                           <TableCell className="text-right font-mono tabular-nums text-sm text-zinc-200">{formatMW(row.CURRENT_TOTALDEMAND)}</TableCell>
@@ -937,7 +952,7 @@ function InterconnectorTables({
                       const tk = getTimeKey(row);
                       const sel = selectedRow?.source === "5PD" && selectedRow?.timeKey === tk && selectedRow?.label === getInterconnectorName(row.INTERCONNECTORID);
                       return (
-                        <TableRow key={`${tk}-${row.INTERCONNECTORID}-${idx}`} className={`cursor-pointer transition-colors ${sel ? "bg-emerald-500/10" : ""}`} onClick={() => handleSelect("5PD", row)}>
+                        <TableRow key={`${tk}-${row.INTERCONNECTORID}-${idx}`} tabIndex={0} role="button" onKeyDown={rowKeyHandler(() => handleSelect("5PD", row))} className={`cursor-pointer transition-colors ${sel ? "bg-emerald-500/10" : ""}`} onClick={() => handleSelect("5PD", row)}>
                           <TableCell className="font-mono text-xs">{tk ? formatShortTime(tk) : "\u2014"}</TableCell>
                           <TableCell className="text-xs font-medium">{getInterconnectorName(row.INTERCONNECTORID)}</TableCell>
                           <TableCell className="text-right font-mono tabular-nums text-sm text-zinc-500">{formatMW(row.PREVIOUS_MWFLOW)}</TableCell>
@@ -982,7 +997,7 @@ function InterconnectorTables({
                       const tk = getTimeKey(row);
                       const sel = selectedRow?.source === "30PD" && selectedRow?.timeKey === tk && selectedRow?.label === getInterconnectorName(row.INTERCONNECTORID);
                       return (
-                        <TableRow key={`${tk}-${row.INTERCONNECTORID}-${idx}`} className={`cursor-pointer transition-colors ${sel ? "bg-blue-500/10" : ""}`} onClick={() => handleSelect("30PD", row)}>
+                        <TableRow key={`${tk}-${row.INTERCONNECTORID}-${idx}`} tabIndex={0} role="button" onKeyDown={rowKeyHandler(() => handleSelect("30PD", row))} className={`cursor-pointer transition-colors ${sel ? "bg-blue-500/10" : ""}`} onClick={() => handleSelect("30PD", row)}>
                           <TableCell className="font-mono text-xs">{tk ? formatShortTime(tk) : "\u2014"}</TableCell>
                           <TableCell className="text-xs font-medium">{getInterconnectorName(row.INTERCONNECTORID)}</TableCell>
                           <TableCell className="text-right font-mono tabular-nums text-sm text-zinc-500">{formatMW(row.PREVIOUS_MWFLOW)}</TableCell>
@@ -1025,13 +1040,15 @@ function SensitivityTables({
 }) {
   const filtered5pd = useMemo(() => {
     if (!data?.p5min) return [];
-    const byRegion = data.p5min.filter((r) => r.REGIONID === region);
+    const byRegion = data.p5min.filter((r) => r.OFFSET_REGIONID === region);
     return sortByTime(filterByDirection(byRegion, direction));
   }, [data, region, direction]);
 
   const filtered30pd = useMemo(() => {
     if (!data?.predispatch) return [];
-    const byRegion = data.predispatch.filter((r) => r.REGIONID === region);
+    // Filter by OFFSET_REGIONID (the demand offset state shown in "Demand offset" column)
+    // so the region selector filters by which state's demand was offset
+    const byRegion = data.predispatch.filter((r) => r.OFFSET_REGIONID === region);
     return sortByTime(filterByDirection(byRegion, direction)).slice(2);
   }, [data, region, direction]);
 
@@ -1059,7 +1076,7 @@ function SensitivityTables({
       <Card className="rounded-xl">
         <CardHeader>
           <div>
-            <CardTitle className="text-base">30-Min PD Sensitivities — {regionLabel}</CardTitle>
+            <CardTitle className="text-base">30-Min PD Sensitivities — {regionLabel} demand offset</CardTitle>
             {direction !== "all" && <p className="text-xs text-zinc-500 mt-1">{direction}s only</p>}
           </div>
         </CardHeader>
@@ -1082,7 +1099,7 @@ function SensitivityTables({
                       const tk = getTimeKey(row);
                       const sel = selectedRow?.source === "30PD" && selectedRow?.timeKey === tk && selectedRow?.scenario === formatScenarioLabel(row);
                       return (
-                        <TableRow key={`${tk}-${row.SCENARIO}-${idx}`} className={`cursor-pointer transition-colors ${sel ? "bg-blue-500/10" : ""}`} onClick={() => handleSelect("30PD", row)}>
+                        <TableRow key={`${tk}-${row.SCENARIO}-${idx}`} tabIndex={0} role="button" onKeyDown={rowKeyHandler(() => handleSelect("30PD", row))} className={`cursor-pointer transition-colors ${sel ? "bg-blue-500/10" : ""}`} onClick={() => handleSelect("30PD", row)}>
                           <TableCell className="font-mono text-xs">{tk ? formatShortTime(tk) : "\u2014"}</TableCell>
                           <TableCell className="text-xs font-medium font-mono">{formatScenarioLabel(row)}</TableCell>
                           <TableCell className="text-right font-mono tabular-nums text-sm text-zinc-500">{formatCurrency(row.PREVIOUS_RRPSCENARIO)}</TableCell>
@@ -1096,7 +1113,7 @@ function SensitivityTables({
                   </TableBody>
                 </Table>
               </div>
-            ) : <EmptyState label={`No 30PD sensitivity ${direction !== "all" ? `${direction}s` : "changes"} for ${regionLabel}`} />
+            ) : <EmptyState label={`No 30PD sensitivity ${direction !== "all" ? `${direction}s` : "changes"} for ${regionLabel} demand offset`} />
           ) : <LoadingState />}
         </CardContent>
       </Card>
@@ -1146,7 +1163,7 @@ function ActualsTables({
         <CardContent>
           {data ? (
             filteredPrices.length > 0 ? (
-              <div className="max-h-[400px] overflow-auto">
+              <div className="max-h-[500px] overflow-auto">
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -1202,7 +1219,7 @@ function ActualsTables({
         <CardContent>
           {data ? (
             filteredDemand.length > 0 ? (
-              <div className="max-h-[400px] overflow-auto">
+              <div className="max-h-[500px] overflow-auto">
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -1258,7 +1275,7 @@ function ActualsTables({
         <CardContent>
           {data ? (
             filteredICs.length > 0 ? (
-              <div className="max-h-[400px] overflow-auto">
+              <div className="max-h-[500px] overflow-auto">
                 <Table>
                   <TableHeader>
                     <TableRow>

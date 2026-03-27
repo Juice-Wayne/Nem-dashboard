@@ -87,7 +87,8 @@ export async function GET(request: NextRequest) {
         rampRateMWMin: Number(sp.get("rampRate")) || DEFAULT_START_COST_CONFIG.rampRateMWMin,
       };
       const day = (sp.get("day") === "d+1" ? "d+1" : "today") as "today" | "d+1";
-      const data = await getStartCostAnalysis(region, config, day);
+      const sensScenario = sp.get("sensScenario") ? Number(sp.get("sensScenario")) : undefined;
+      const data = await getStartCostAnalysis(region, config, day, sensScenario || undefined);
       return NextResponse.json({ startcost: data }, { headers: CACHE_HEADERS });
     }
 
