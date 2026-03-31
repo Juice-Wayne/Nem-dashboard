@@ -227,6 +227,15 @@
   body {
     @apply bg-background text-foreground;
   }
+  button,
+  [role="button"],
+  [role="tab"],
+  [role="combobox"],
+  select,
+  a[href],
+  label[for] {
+    cursor: pointer;
+  }
 }
 
 /* =====================================================

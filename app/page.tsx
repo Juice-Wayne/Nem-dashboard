@@ -1784,10 +1784,50 @@ function StartCostTab() {
             <ConfigInput label="Load" unit="MW" value={loadMW} onChange={setLoadMW} />
             <ConfigInput label="Start Cost" unit="$" value={startCost} onChange={setStartCost} />
             <ConfigInput label="Ramp Rate" unit="MW/min" value={rampRate} onChange={setRampRate} />
-            <div className="flex items-center gap-1.5 ml-auto">
+            <div className="flex items-center gap-1.5">
               <span className="text-[10px] text-zinc-500">SRMC:</span>
               <span className="text-[11px] font-mono font-semibold text-blue-400">${computedSRMC.toFixed(2)}/MWh</span>
             </div>
+            {selected && (
+              <>
+                <div className="w-px h-5 bg-zinc-700/50 mx-1 hidden sm:block" />
+                <div className="flex items-center gap-3 flex-wrap text-[11px]">
+                  {sensScenario > 0 && (
+                    <span className="px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-400 text-[9px] font-medium">
+                      {QLD_SENS_SCENARIOS.find(s => s.rrpeep === sensScenario)?.label ?? `RRPEEP${sensScenario}`}
+                    </span>
+                  )}
+                  <div>
+                    <span className="text-zinc-500">Start: </span>
+                    <span className="font-mono font-semibold text-blue-400">{shortDateTime(selected.startTime)}</span>
+                  </div>
+                  {selected.optimalStopTime && (
+                    <div>
+                      <span className="text-zinc-500">Off: </span>
+                      <span className="font-mono font-semibold text-amber-400">{shortDateTime(selected.optimalStopTime)}</span>
+                    </div>
+                  )}
+                  {selected.optimalRunMinutes != null && (
+                    <div>
+                      <span className="text-zinc-500">Run: </span>
+                      <span className="font-mono font-semibold">{selected.optimalRunMinutes >= 60 ? `${(selected.optimalRunMinutes / 60).toFixed(1)}h` : `${selected.optimalRunMinutes}min`}</span>
+                    </div>
+                  )}
+                  <div>
+                    <span className="text-zinc-500">Profit: </span>
+                    <span className={`font-mono font-semibold ${selected.optimalProfit > 0 ? "text-emerald-400" : "text-red-400"}`}>
+                      {selected.optimalProfit > 0 ? "+" : ""}${selected.optimalProfit.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                    </span>
+                  </div>
+                  {selected.recoveryMinutes != null && (
+                    <div>
+                      <span className="text-zinc-500">Recovery: </span>
+                      <span className="font-mono font-semibold text-emerald-400">{selected.recoveryMinutes}min</span>
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
           </div>
         </CardContent>
       </Card>
@@ -1795,56 +1835,10 @@ function StartCostTab() {
       {error && <div className="h-24 flex items-center justify-center text-red-400 text-sm">Failed to load start analysis</div>}
       {!data && !error && <div className="h-24 flex items-center justify-center text-zinc-500 text-sm animate-pulse">Loading start analysis...</div>}
 
-      {selected && (
-        <Card>
-          <CardContent className="p-3">
-            <div className="flex items-center gap-4 flex-wrap text-[11px]">
-              {sensScenario > 0 && (
-                <span className="px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-400 text-[9px] font-medium">
-                  {QLD_SENS_SCENARIOS.find(s => s.rrpeep === sensScenario)?.label ?? `RRPEEP${sensScenario}`}
-                </span>
-              )}
-              <div>
-                <span className="text-zinc-500">Start: </span>
-                <span className="font-mono font-semibold text-blue-400">{shortDateTime(selected.startTime)}</span>
-              </div>
-              {selected.optimalStopTime && (
-                <div>
-                  <span className="text-zinc-500">Optimal off: </span>
-                  <span className="font-mono font-semibold text-amber-400">{shortDateTime(selected.optimalStopTime)}</span>
-                </div>
-              )}
-              {selected.optimalRunMinutes != null && (
-                <div>
-                  <span className="text-zinc-500">Run: </span>
-                  <span className="font-mono font-semibold">{selected.optimalRunMinutes >= 60 ? `${(selected.optimalRunMinutes / 60).toFixed(1)}h` : `${selected.optimalRunMinutes}min`}</span>
-                </div>
-              )}
-              <div>
-                <span className="text-zinc-500">Max profit: </span>
-                <span className={`font-mono font-semibold ${selected.optimalProfit > 0 ? "text-emerald-400" : "text-red-400"}`}>
-                  {selected.optimalProfit > 0 ? "+" : ""}${selected.optimalProfit.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                </span>
-              </div>
-              {selected.recoveryMinutes != null && (
-                <div>
-                  <span className="text-zinc-500">Recovers in: </span>
-                  <span className="font-mono font-semibold text-emerald-400">{selected.recoveryMinutes}min</span>
-                </div>
-              )}
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
       {chartData.length > 0 && (
         <Card>
           <CardContent className="p-3">
-            <div className="flex items-center gap-3 mb-2">
-              <p className="text-[10px] text-zinc-500">
-                QLD1 Price Forecast {sensScenario ? `(PD Sensitivity: ${QLD_SENS_SCENARIOS.find(s => s.rrpeep === sensScenario)?.label ?? `RRPEEP${sensScenario}`})` : "(P5MIN + PD)"} — SRMC ${(result?.srmc ?? computedSRMC).toFixed(2)}/MWh
-              </p>
-            </div>
+            <div className="mb-1" />
             <ResponsiveContainer width="100%" height={220}>
               <ComposedChart data={chartData}>
                 <XAxis

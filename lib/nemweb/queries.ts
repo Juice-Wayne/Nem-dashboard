@@ -1127,7 +1127,11 @@ export async function getStartCostAnalysis(
     const intervals: StartInterval[] = [];
     let cumBalance = -config.startCost;
     let minuteOffset = 0;
+    let peakBalance = -config.startCost;
+    let peakIdx = -1;
 
+    // Run through ALL remaining intervals — don't stop at the first dip.
+    // The optimal stop point is determined by peak balance afterwards.
     for (let i = startIdx; i < prices.length; i++) {
       const p = prices[i];
       const dur = p.durationMin;
@@ -1139,10 +1143,6 @@ export async function getStartCostAnalysis(
       const gasCostInterval = mw * config.heatRate * config.gasCostGJ * hrs;
       const revenue = mw * p.rrp * hrs;
       const margin = revenue - gasCostInterval;
-
-      // Stop when price drops below SRMC (margin negative) and we've already recovered start cost
-      // or when margin is negative past the ramp (wouldn't start running at a loss)
-      if (margin < 0 && minuteOffset >= rampMinutes) break;
 
       minuteOffset += dur;
       cumBalance += margin;
@@ -1156,7 +1156,16 @@ export async function getStartCostAnalysis(
         margin,
         cumBalance,
       });
+
+      if (cumBalance > peakBalance) {
+        peakBalance = cumBalance;
+        peakIdx = intervals.length - 1;
+      }
     }
+
+    // Optimal stop is at peak profit, not necessarily the last interval
+    const optimalIntervals = peakIdx >= 0 ? intervals.slice(0, peakIdx + 1) : intervals;
+    const optimalLast = optimalIntervals[optimalIntervals.length - 1];
 
     const recoveryIdx = intervals.findIndex((iv) => iv.cumBalance > 0);
     const recoveryTime = recoveryIdx >= 0 ? intervals[recoveryIdx].time : null;
@@ -1168,43 +1177,80 @@ export async function getStartCostAnalysis(
       }
     }
 
-    // Total run duration
+    // Total run duration (to optimal stop)
     let totalRunMinutes = 0;
-    for (let k = 0; k < intervals.length; k++) {
+    for (let k = 0; k < optimalIntervals.length; k++) {
       totalRunMinutes += prices[startIdx + k].durationMin;
     }
-
-    const lastInterval = intervals[intervals.length - 1];
 
     return {
       startTime: prices[startIdx].time,
       intervals,
       recoveryTime,
       recoveryMinutes,
-      finalBalance: lastInterval?.cumBalance ?? -config.startCost,
-      peakBalance: lastInterval?.cumBalance ?? -config.startCost,
-      optimalStopTime: lastInterval?.time ?? null,
-      optimalRunMinutes: intervals.length > 0 ? totalRunMinutes : null,
-      optimalProfit: lastInterval?.cumBalance ?? -config.startCost,
+      finalBalance: intervals[intervals.length - 1]?.cumBalance ?? -config.startCost,
+      peakBalance,
+      optimalStopTime: optimalLast?.time ?? null,
+      optimalRunMinutes: optimalIntervals.length > 0 ? totalRunMinutes : null,
+      optimalProfit: peakBalance,
     };
   }
 
-  const analyses: StartAnalysis[] = [];
-  for (let i = 0; i < prices.length; i++) {
-    const a = analyseStart(i);
-    if (a.peakBalance > -config.startCost) {
-      analyses.push(a);
+  // Build a cumulative-minutes lookup so we can find the index that is
+  // ~rampMinutes before any given index (for ramp lead-time starts).
+  const cumMinutes: number[] = [];
+  {
+    let acc = 0;
+    for (const p of prices) {
+      cumMinutes.push(acc);
+      acc += p.durationMin;
     }
   }
 
-  // Sort: best final balance first, recovered starts prioritised
+  function indexMinutesBefore(idx: number, mins: number): number {
+    const target = cumMinutes[idx] - mins;
+    if (target <= 0) return 0;
+    for (let j = idx - 1; j >= 0; j--) {
+      if (cumMinutes[j] <= target) return j;
+    }
+    return 0;
+  }
+
+  const analyses: StartAnalysis[] = [];
+  const evaluated = new Set<number>();
+
+  for (let i = 0; i < prices.length; i++) {
+    // Always evaluate this index as a start point
+    if (!evaluated.has(i)) {
+      evaluated.add(i);
+      const a = analyseStart(i);
+      if (a.peakBalance > -config.startCost) analyses.push(a);
+    }
+
+    // If this interval has prices above SRMC, also evaluate starting
+    // rampMinutes earlier so the generator is near full load by now.
+    if (prices[i].rrp > srmc) {
+      const earlyIdx = indexMinutesBefore(i, rampMinutes);
+      if (!evaluated.has(earlyIdx)) {
+        evaluated.add(earlyIdx);
+        const a = analyseStart(earlyIdx);
+        if (a.peakBalance > -config.startCost) analyses.push(a);
+      }
+      // Also try a few intervals in between for finer granularity
+      const midIdx = indexMinutesBefore(i, Math.ceil(rampMinutes / 2));
+      if (!evaluated.has(midIdx)) {
+        evaluated.add(midIdx);
+        const a = analyseStart(midIdx);
+        if (a.peakBalance > -config.startCost) analyses.push(a);
+      }
+    }
+  }
+
+  // Sort: highest profit first, recovered starts prioritised
   analyses.sort((a, b) => {
     if (a.recoveryTime && !b.recoveryTime) return -1;
     if (!a.recoveryTime && b.recoveryTime) return 1;
-    if (a.recoveryTime && b.recoveryTime) {
-      return (a.recoveryMinutes ?? Infinity) - (b.recoveryMinutes ?? Infinity);
-    }
-    return b.finalBalance - a.finalBalance;
+    return b.optimalProfit - a.optimalProfit;
   });
 
   const result: StartCostResult = {
