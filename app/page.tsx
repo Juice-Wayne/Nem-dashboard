@@ -1790,7 +1790,7 @@ function StartCostTab() {
             </div>
             {selected && (
               <>
-                <div className="w-px h-5 bg-zinc-700/50 mx-1 hidden sm:block" />
+                <div className="w-px h-8 bg-zinc-500/60 mx-2" />
                 <div className="flex items-center gap-3 flex-wrap text-[11px]">
                   {sensScenario > 0 && (
                     <span className="px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-400 text-[9px] font-medium">
