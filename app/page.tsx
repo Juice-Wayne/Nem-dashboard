@@ -2139,13 +2139,20 @@ function buildMarketText(market: MarketSummaryData, manual: MarketManualData): s
     }
   }
 
-  if ((market.outages ?? []).length > 0) {
+  const nonSaOutages = (market.outages ?? []).filter((o) => !o.region.startsWith("SA"));
+  if (nonSaOutages.length > 0) {
     lines.push("", "Outages");
-    for (const o of market.outages) {
-      const label = o.type === "full"
-        ? "outage"
-        : `partial outage (${o.availableMW}/${o.maxCapacity}MW)`;
-      lines.push(`${o.duid}: ${label}`);
+    const byRegion = new Map<string, typeof nonSaOutages>();
+    for (const o of nonSaOutages) {
+      const key = o.region.replace("1", "");
+      if (!byRegion.has(key)) byRegion.set(key, []);
+      byRegion.get(key)!.push(o);
+    }
+    for (const [region, outages] of byRegion) {
+      const items = outages.map((o) => {
+        return o.type === "full" ? `${o.duid}: outage` : `${o.duid}: partial outage (${o.availableMW}/${o.maxCapacity}MW)`;
+      });
+      lines.push(`${region}: ${items.join(", ")}`);
     }
   }
 
