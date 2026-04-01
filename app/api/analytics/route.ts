@@ -10,6 +10,7 @@ import {
   getRooftopPV,
   getReserveMargins,
   getStartCostAnalysis,
+  getMarketSummary,
   DEFAULT_START_COST_CONFIG,
   clearResultCache,
   clearDirCache,
@@ -74,6 +75,11 @@ export async function GET(request: NextRequest) {
       const hours = Number(request.nextUrl.searchParams.get("hours")) || 3;
       const data = await safeQuery(() => getPriceSpikes(hours), "PRICE_SPIKES");
       return NextResponse.json({ spikes: data }, { headers: CACHE_HEADERS });
+    }
+
+    if (tab === "market") {
+      const data = await getMarketSummary();
+      return NextResponse.json({ market: data }, { headers: CACHE_HEADERS });
     }
 
     if (tab === "startcost") {

@@ -19,11 +19,12 @@ export {
   getRooftopPV,
   getReserveMargins,
   getStartCostAnalysis,
+  getMarketSummary,
   clearResultCache,
 } from "./queries";
 
-export type { RebidEntry, PriceSpikeEntry, StartCostResult, StartCostConfig, StartAnalysis, StartInterval } from "./queries";
+export type { RebidEntry, PriceSpikeEntry, StartCostResult, StartCostConfig, StartAnalysis, StartInterval, MarketSummaryResult, MarketRegionSummary, MarketICBinding, MarketOutage, MarketTemps } from "./queries";
 export { DEFAULT_START_COST_CONFIG } from "./queries";
 
-export { clearDirCache, getDuidFuelMap } from "./fetcher";
-export type { FuelCategory } from "./fetcher";
+export { clearDirCache, getDuidFuelMap, getDuidInfoMap } from "./fetcher";
+export type { FuelCategory, DuidInfo } from "./fetcher";
