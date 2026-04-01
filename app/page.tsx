@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useMemo, useCallback } from "react";
-import { Copy, Check, RefreshCw, Sun, Moon } from "lucide-react";
+import { Copy, Check, RefreshCw, Sun, Moon, Pencil, Save, Plus, X, Thermometer, Wind, Zap, ArrowLeftRight, AlertTriangle } from "lucide-react";
 import useSWR from "swr";
 import { cn } from "@/lib/utils";
 import { useAutoRefresh } from "@/lib/hooks/use-auto-refresh";
@@ -163,7 +163,7 @@ const IC_OPTIONS = Object.entries(INTERCONNECTORS).map(([id, ic]) => ({
 
 type Direction = "all" | "increase" | "decrease";
 
-type TabId = "prices" | "demand" | "interconnectors" | "sensitivities" | "actuals" | "spikes" | "startcost";
+type TabId = "prices" | "demand" | "interconnectors" | "sensitivities" | "actuals" | "spikes" | "startcost" | "market";
 
 // --- Helpers ---
 
@@ -381,7 +381,7 @@ export default function HomePage() {
   const clearSelection = () => setSelectedRow(null);
 
   // Determine if we show region or interconnector selector
-  const isAnalyticsTab = activeTab === "spikes" || activeTab === "startcost";
+  const isAnalyticsTab = activeTab === "spikes" || activeTab === "startcost" || activeTab === "market";
   const showRegionSelector = !isAnalyticsTab && activeTab !== "interconnectors";
   const showInterconnectorSelector = activeTab === "interconnectors";
   const showFilters = !isAnalyticsTab;
@@ -401,6 +401,7 @@ export default function HomePage() {
               <TabsTrigger value="actuals">Actuals vs 5PD</TabsTrigger>
               <TabsTrigger value="spikes">Spikes</TabsTrigger>
               <TabsTrigger value="startcost">BR Start</TabsTrigger>
+              <TabsTrigger value="market">Market</TabsTrigger>
             </TabsList>
             <button
               onClick={handleManualRefresh}
@@ -580,6 +581,11 @@ export default function HomePage() {
         {/* === BR START TAB === */}
         <TabsContent value="startcost">
           <StartCostTab />
+        </TabsContent>
+
+        {/* === MARKET ANALYSIS TAB === */}
+        <TabsContent value="market">
+          <MarketAnalysisTab />
         </TabsContent>
       </Tabs>
     </div>
@@ -1863,7 +1869,7 @@ function StartCostTab() {
                   label={{ value: "MW", angle: 90, position: "insideRight", style: { fontSize: 9, fill: "#52525b" } }}
                 />
                 <Tooltip content={<ChartTip />} />
-                <ReferenceLine yAxisId="price" y={computedSRMC} stroke="#3b82f6" strokeDasharray="4 4" strokeOpacity={0.4} />
+                <ReferenceLine yAxisId="price" y={computedSRMC} stroke="#3b82f6" strokeDasharray="4 4" strokeOpacity={0.8} strokeWidth={1.5} />
                 <Area
                   yAxisId="price"
                   type="stepAfter"
@@ -2021,6 +2027,388 @@ function LoadingState() {
   return (
     <div className="h-24 flex items-center justify-center text-zinc-500">
       Loading...
+    </div>
+  );
+}
+
+// ============================================================
+// Market Analysis Tab
+// ============================================================
+
+interface MarketOutageUI {
+  duid: string;
+  stationName: string;
+  region: string;
+  fuel: string;
+  maxCapacity: number;
+  currentOutput: number;
+  availableMW: number;
+  reductionMW: number;
+  type: "full" | "partial";
+}
+
+interface MarketRegionSummaryUI {
+  region: string;
+  peakDemand: number;
+  currentDemand: number;
+  solarMW: number;
+  windMW: number;
+  rooftopPvMW: number;
+  totalRenewablesMW: number;
+}
+
+interface MarketICBindingUI {
+  interconnectorId: string;
+  name: string;
+  direction: string;
+  intervals: number;
+  totalIntervals: number;
+  avgFlowMW: number;
+  bindingFrom: string;
+  bindingTo: string;
+  bindingDescription: string;
+}
+
+interface MarketSummaryData {
+  regions: MarketRegionSummaryUI[];
+  interconnectors: MarketICBindingUI[];
+  outages: MarketOutageUI[];
+  temps: Record<string, number | null>;
+  timestamp: string;
+}
+
+// Manual overrides stored in localStorage (temps, notes — not on NEMWeb)
+interface MarketManualData {
+  date: string;
+  temps: Record<string, string>;   // region → "26°C"
+  notes: Record<string, string>;   // region → "high cloud 89%"
+}
+
+const MANUAL_STORAGE_KEY = "nem-market-manual";
+
+function getToday(): string {
+  return new Date().toLocaleDateString("en-CA", { timeZone: "Australia/Brisbane" });
+}
+
+function loadManualData(): MarketManualData {
+  try {
+    const raw = localStorage.getItem(MANUAL_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as MarketManualData;
+      if (parsed.date === getToday()) return parsed;
+    }
+  } catch { /* ignore */ }
+  return { date: getToday(), temps: {}, notes: {} };
+}
+
+function saveManualData(data: MarketManualData) {
+  localStorage.setItem(MANUAL_STORAGE_KEY, JSON.stringify({ ...data, date: getToday() }));
+}
+
+const fetcher = (url: string) => fetch(url).then((r) => r.json());
+
+function buildMarketText(market: MarketSummaryData, manual: MarketManualData): string {
+  const dateStr = new Date().toLocaleDateString("en-AU", {
+    timeZone: "Australia/Brisbane", weekday: "short", day: "numeric", month: "short", year: "numeric",
+  });
+  const lines: string[] = [`Market Analysis — ${dateStr}`, ""];
+
+  for (const r of market.regions) {
+    const parts: string[] = [];
+    // Manual temp takes priority, then API temp from Open-Meteo
+    const regionKey = r.region.replace("1", "");
+    const manualTemp = manual.temps[r.region] || manual.temps[regionKey];
+    const apiTemp = market.temps?.[regionKey];
+    if (manualTemp) {
+      parts.push(`max temp ${manualTemp}`);
+    } else if (apiTemp != null) {
+      parts.push(`max temp ${apiTemp}°C`);
+    }
+    if (r.windMW > 0) parts.push(`wind ~${r.windMW.toLocaleString()}MW`);
+    const solarTotal = r.solarMW + r.rooftopPvMW;
+    if (solarTotal > 0) parts.push(`solar peaking ~${solarTotal.toLocaleString()}MW`);
+    parts.push(`demand ${r.peakDemand.toLocaleString()}MW`);
+    if (manual.notes[r.region]) parts.push(manual.notes[r.region]);
+    lines.push(`${r.region}: ${parts.join(", ")}`);
+  }
+
+  if ((market.interconnectors ?? []).length > 0) {
+    lines.push("", "Interconnectors");
+    for (const ic of market.interconnectors) {
+      lines.push(`${ic.name} binding ${ic.direction} ${ic.bindingDescription || ""}`.trim());
+    }
+  }
+
+  if ((market.outages ?? []).length > 0) {
+    lines.push("", "Outages");
+    for (const o of market.outages) {
+      const label = o.type === "full"
+        ? "outage"
+        : `partial outage (${o.availableMW}/${o.maxCapacity}MW)`;
+      lines.push(`${o.duid}: ${label}`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
+function MarketAnalysisTab() {
+  const { data: rawData, isLoading } = useSWR<{ market: MarketSummaryData }>(
+    "/api/analytics?tab=market",
+    fetcher,
+    { refreshInterval: 30_000 },
+  );
+  const marketRaw = rawData?.market ?? null;
+  const market = marketRaw ? {
+    ...marketRaw,
+    outages: marketRaw.outages ?? [],
+    interconnectors: marketRaw.interconnectors ?? [],
+    regions: marketRaw.regions ?? [],
+    temps: marketRaw.temps ?? {},
+  } : null;
+
+  const [manual, setManual] = useState<MarketManualData>(loadManualData);
+  const [editingManual, setEditingManual] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  // Edit state drafts
+  const [draftTemps, setDraftTemps] = useState<Record<string, string>>({});
+  const [draftNotes, setDraftNotes] = useState<Record<string, string>>({});
+
+  const startEdit = () => {
+    setDraftTemps({ ...manual.temps });
+    setDraftNotes({ ...manual.notes });
+    setEditingManual(true);
+  };
+
+  const saveEdit = () => {
+    const next: MarketManualData = { date: getToday(), temps: draftTemps, notes: draftNotes };
+    saveManualData(next);
+    setManual(next);
+    setEditingManual(false);
+  };
+
+  const handleCopy = async () => {
+    if (!market) return;
+    await navigator.clipboard.writeText(buildMarketText(market, manual));
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const regionBg: Record<string, string> = {
+    NSW: "bg-blue-500/10 border-blue-500/20",
+    QLD: "bg-red-500/10 border-red-500/20",
+    VIC: "bg-violet-500/10 border-violet-500/20",
+    SA: "bg-amber-500/10 border-amber-500/20",
+  };
+
+  const regionText: Record<string, string> = {
+    NSW: "text-blue-400", QLD: "text-red-400", VIC: "text-violet-400", SA: "text-amber-400",
+  };
+
+  if (isLoading || !market) {
+    return <LoadingState />;
+  }
+
+  // --- Edit Manual Data (temps, notes) ---
+  if (editingManual) {
+    const regions = ["NSW", "QLD", "VIC", "SA"];
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-medium text-zinc-300">Edit Temperatures & Notes</h2>
+          <div className="flex gap-2">
+            <button onClick={() => setEditingManual(false)} className="px-3 py-1.5 text-xs rounded-md font-medium text-zinc-400 hover:text-zinc-200 hover:bg-white/[0.04] transition-colors">Cancel</button>
+            <button onClick={saveEdit} className="px-3 py-1.5 text-xs rounded-md font-medium bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25 transition-colors flex items-center gap-1.5">
+              <Save className="h-3.5 w-3.5" /> Save
+            </button>
+          </div>
+        </div>
+
+        <Card className="rounded-xl">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-2"><Thermometer className="h-4 w-4 text-zinc-400" /> Temperatures & Notes</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {regions.map((r) => (
+              <div key={r} className={cn("rounded-lg border p-3 space-y-2", regionBg[r])}>
+                <div className={cn("text-xs font-semibold", regionText[r])}>{r}</div>
+                <div className="grid grid-cols-2 gap-2">
+                  <input placeholder="Max temp (e.g. 26°C)" value={draftTemps[r] ?? ""} onChange={(e) => setDraftTemps((p) => ({ ...p, [r]: e.target.value }))}
+                    className="bg-white/[0.05] border border-white/[0.08] rounded px-2 py-1.5 text-xs text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-500" />
+                  <input placeholder="Notes (e.g. high cloud 89%)" value={draftNotes[r] ?? ""} onChange={(e) => setDraftNotes((p) => ({ ...p, [r]: e.target.value }))}
+                    className="bg-white/[0.05] border border-white/[0.08] rounded px-2 py-1.5 text-xs text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-500" />
+                </div>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  // --- Display Mode ---
+  const summaryText = buildMarketText(market, manual);
+
+  return (
+    <div className="space-y-4">
+      {/* Copyable text summary */}
+      <Card className="rounded-xl">
+        <CardContent className="py-3">
+          <div className="relative">
+            <div className="rounded-md border border-input bg-white/[0.03] p-3 pr-12 text-xs font-mono text-zinc-300 whitespace-pre-wrap break-words leading-relaxed">
+              {summaryText}
+            </div>
+            <Button variant="ghost" size="icon-sm" className="absolute top-2 right-2" onClick={handleCopy}>
+              {copied ? <Check className="h-4 w-4 text-emerald-400" /> : <Copy className="h-4 w-4" />}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-medium text-zinc-400">
+          Market Analysis — {new Date().toLocaleDateString("en-AU", { timeZone: "Australia/Brisbane", weekday: "short", day: "numeric", month: "short", year: "numeric" })}
+        </h2>
+        <button onClick={startEdit} className="px-3 py-1.5 text-xs rounded-md font-medium text-zinc-400 hover:text-zinc-200 hover:bg-white/[0.04] transition-colors flex items-center gap-1.5">
+          <Pencil className="h-3.5 w-3.5" /> Temps & Notes
+        </button>
+      </div>
+
+      {/* Region cards — auto-generated from NEMWeb + manual temps */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+        {market.regions.map((r) => (
+          <div key={r.region} className={cn("rounded-xl border p-4 space-y-3", regionBg[r.region])}>
+            <div className={cn("text-sm font-semibold", regionText[r.region])}>{r.region}</div>
+            <div className="space-y-1.5">
+              {(() => {
+                const regionKey = r.region.replace("1", "");
+                const manualTemp = manual.temps[r.region] || manual.temps[regionKey];
+                const apiTemp = market.temps?.[regionKey];
+                const tempDisplay = manualTemp || (apiTemp != null ? `${apiTemp}°C` : null);
+                return tempDisplay ? (
+                  <div className="flex items-center gap-2">
+                    <Thermometer className="h-3.5 w-3.5 text-orange-400 shrink-0" />
+                    <span className="text-xs text-zinc-300">Max {tempDisplay}</span>
+                  </div>
+                ) : null;
+              })()}
+              {r.windMW > 0 && (
+                <div className="flex items-center gap-2">
+                  <Wind className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+                  <span className="text-xs text-zinc-300 font-mono tabular-nums">
+                    {r.windMW.toLocaleString()} MW
+                    <span className="text-zinc-500 ml-1 font-sans">wind</span>
+                  </span>
+                </div>
+              )}
+              {(r.solarMW + r.rooftopPvMW) > 0 && (
+                <div className="flex items-center gap-2">
+                  <Sun className="h-3.5 w-3.5 text-yellow-400 shrink-0" />
+                  <span className="text-xs text-zinc-300 font-mono tabular-nums">
+                    {(r.solarMW + r.rooftopPvMW).toLocaleString()} MW
+                    <span className="text-zinc-500 ml-1 font-sans">solar</span>
+                  </span>
+                </div>
+              )}
+              <div className="flex items-center gap-2">
+                <Zap className="h-3.5 w-3.5 text-blue-400 shrink-0" />
+                <span className="text-xs text-zinc-300 font-mono tabular-nums">
+                  {r.peakDemand.toLocaleString()} MW
+                  <span className="text-zinc-500 ml-1 font-sans">peak demand</span>
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Zap className="h-3.5 w-3.5 text-zinc-600 shrink-0" />
+                <span className="text-xs text-zinc-400 font-mono tabular-nums">
+                  {r.currentDemand.toLocaleString()} MW
+                  <span className="text-zinc-500 ml-1 font-sans">current</span>
+                </span>
+              </div>
+              {manual.notes[r.region] && (
+                <div className="text-[10px] text-zinc-500 mt-1">{manual.notes[r.region]}</div>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Interconnectors at limits — auto-detected */}
+      {market.interconnectors.length > 0 && (
+        <Card className="rounded-xl">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-2">
+              <ArrowLeftRight className="h-4 w-4 text-zinc-400" /> Interconnectors at Limits
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-wrap gap-2">
+              {market.interconnectors.map((ic) => (
+                <div key={ic.interconnectorId} className="inline-flex items-center gap-2 rounded-full border border-cyan-500/20 bg-cyan-500/10 px-3 py-1.5">
+                  <span className="text-xs font-semibold text-cyan-400 font-mono">{ic.name}</span>
+                  <span className="text-[11px] text-zinc-400">
+                    binding {ic.direction} {ic.bindingDescription || ""}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+      {market.interconnectors.length === 0 && (
+        <Card className="rounded-xl">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-2">
+              <ArrowLeftRight className="h-4 w-4 text-zinc-400" /> Interconnectors
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-xs text-zinc-500">No interconnectors detected at limits</div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Outages — auto-detected from NEMWeb */}
+      <Card className="rounded-xl">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4 text-amber-400" /> Outages
+            <span className="text-[10px] text-zinc-600 font-normal ml-1">
+              Thermal units ({">"}30MW) with {">"}30% capacity reduction
+            </span>
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {market.outages.length === 0 ? (
+            <div className="text-xs text-zinc-500">No thermal outages detected</div>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {market.outages.map((o) => (
+                <div
+                  key={o.duid}
+                  className={cn(
+                    "inline-flex items-center gap-2 rounded-lg border px-3 py-1.5",
+                    o.type === "full"
+                      ? "border-rose-500/20 bg-rose-500/10"
+                      : "border-amber-500/20 bg-amber-500/10",
+                  )}
+                >
+                  <span className={cn(
+                    "text-xs font-bold font-mono",
+                    o.type === "full" ? "text-rose-400" : "text-amber-400",
+                  )}>{o.duid}</span>
+                  <span className="text-[11px] text-zinc-400">
+                    {o.type === "full" ? "out" : `${o.availableMW}/${o.maxCapacity}MW`}
+                    <span className="text-zinc-600 ml-1">
+                      {o.fuel} · {o.region.replace("1", "")}
+                    </span>
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }

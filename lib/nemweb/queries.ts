@@ -1,4 +1,4 @@
-import { fetchLatest, normaliseDate, SOURCES } from "./fetcher";
+import { fetchLatest, normaliseDate, SOURCES, getDuidInfoMap } from "./fetcher";
 
 // --- Result cache ---
 
@@ -956,6 +956,419 @@ export async function getReserveMargins(): Promise<
 
   results.sort((a, b) => a.INTERVAL_DATETIME.localeCompare(b.INTERVAL_DATETIME));
   return setCache("reserves", results);
+}
+
+// =======================================================================
+// Market Summary — aggregates demand, renewables, interconnector limits
+// =======================================================================
+
+export interface MarketRegionSummary {
+  region: string;
+  peakDemand: number;          // max TOTALDEMAND across all forecast intervals
+  currentDemand: number;       // latest interval demand
+  solarMW: number;             // utility-scale solar + rooftop
+  windMW: number;              // utility-scale wind
+  rooftopPvMW: number;         // rooftop PV (actual or forecast)
+  totalRenewablesMW: number;   // wind + solar + rooftop
+}
+
+export interface MarketICBinding {
+  interconnectorId: string;
+  name: string;
+  direction: string;           // "north" | "south" | "import" | "export"
+  intervals: number;           // count of intervals at limit
+  totalIntervals: number;      // total intervals in forecast
+  avgFlowMW: number;
+  bindingFrom: string;         // HH:MM of first binding interval
+  bindingTo: string;           // HH:MM of last binding interval
+  bindingDescription: string;  // e.g. "all day", "00:00 to 13:00"
+}
+
+export interface MarketOutage {
+  duid: string;
+  stationName: string;
+  region: string;
+  fuel: string;
+  maxCapacity: number;         // GENERATION_MAX_AVAILABILITY from PASA
+  availableMW: number;         // GENERATION_PASA_AVAILABILITY (min across intervals)
+  currentOutput: number;       // current SCADA output
+  reductionMW: number;         // maxCapacity - availableMW
+  type: "full" | "partial";
+}
+
+export interface MarketTemps {
+  [region: string]: number | null; // max temp °C for capital city, null if fetch failed
+}
+
+export interface MarketSummaryResult {
+  regions: MarketRegionSummary[];
+  interconnectors: MarketICBinding[];
+  outages: MarketOutage[];
+  temps: MarketTemps;
+  timestamp: string;
+}
+
+const IC_NAMES: Record<string, string> = {
+  "NSW1-QLD1": "QNI",
+  "N-Q-MNSP1": "Terranora",
+  "VIC1-NSW1": "VNI",
+  "V-SA": "Heywood",
+  "V-S-MNSP1": "Murraylink",
+};
+
+// Capital city coords for max temp forecast (Open-Meteo, free, no API key)
+const CAPITAL_COORDS: { region: string; lat: number; lon: number }[] = [
+  { region: "NSW", lat: -33.8688, lon: 151.2093 },  // Sydney
+  { region: "QLD", lat: -27.4698, lon: 153.0251 },  // Brisbane
+  { region: "VIC", lat: -37.8136, lon: 144.9631 },  // Melbourne
+  { region: "SA",  lat: -34.9285, lon: 138.6007 },   // Adelaide
+];
+
+let tempsCache: { temps: MarketTemps; fetchedAt: number } | null = null;
+const TEMPS_CACHE_TTL = 30 * 60_000; // 30 minutes
+
+async function fetchCapitalTemps(): Promise<MarketTemps> {
+  if (tempsCache && Date.now() - tempsCache.fetchedAt < TEMPS_CACHE_TTL) {
+    return tempsCache.temps;
+  }
+  const temps: MarketTemps = {};
+  try {
+    const lats = CAPITAL_COORDS.map((c) => c.lat).join(",");
+    const lons = CAPITAL_COORDS.map((c) => c.lon).join(",");
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lats}&longitude=${lons}&daily=temperature_2m_max&timezone=Australia%2FSydney&forecast_days=1`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) throw new Error(`Open-Meteo ${res.status}`);
+    const json = await res.json();
+    // Open-Meteo returns an array when multiple locations are queried
+    const results = Array.isArray(json) ? json : [json];
+    for (let i = 0; i < CAPITAL_COORDS.length; i++) {
+      const maxTemp = results[i]?.daily?.temperature_2m_max?.[0];
+      temps[CAPITAL_COORDS[i].region] = typeof maxTemp === "number" ? Math.round(maxTemp) : null;
+    }
+  } catch (err) {
+    console.warn("[weather] Failed to fetch capital temps:", err instanceof Error ? err.message : err);
+    for (const c of CAPITAL_COORDS) temps[c.region] = null;
+  }
+  tempsCache = { temps, fetchedAt: Date.now() };
+  return temps;
+}
+
+export async function getMarketSummary(): Promise<MarketSummaryResult> {
+  const cached = getCached<MarketSummaryResult>("marketSummary");
+  if (cached) return cached;
+
+  // Fetch all data in parallel (including weather temps)
+  const [p5Data, pdData, scadaData, duidInfo, rooftopData, pdpasaDuidData, temps] = await Promise.all([
+    fetchLatest(SOURCES.p5min),
+    fetchLatest(SOURCES.predispatch),
+    fetchLatest(SOURCES.dispatchScada),
+    getDuidInfoMap(),
+    (async () => {
+      try {
+        const [actualFiles, forecastFiles] = await Promise.all([
+          fetchLatest(SOURCES.rooftopPvActual),
+          fetchLatest(SOURCES.rooftopPvForecast),
+        ]);
+        return { actualFiles, forecastFiles };
+      } catch { return null; }
+    })(),
+    fetchLatest(SOURCES.pdpasaDuid).catch(() => null),
+    fetchCapitalTemps(),
+  ]);
+
+  const REGION_IDS = ["NSW1", "QLD1", "VIC1", "SA1"];
+
+  // --- Peak & current demand from predispatch ---
+  const pdRows = getTable(pdData[0], "REGION_SOLUTION", "REGIONSOLUTION");
+  const peakDemand = new Map<string, number>();
+  const currentDemand = new Map<string, number>();
+  const latestInterval = new Map<string, string>();
+
+  for (const r of pdRows) {
+    const regionId = r.REGIONID;
+    if (!REGION_IDS.includes(regionId)) continue;
+    const demand = num(r.TOTALDEMAND);
+    const dt = r.DATETIME || r.INTERVAL_DATETIME || "";
+
+    peakDemand.set(regionId, Math.max(peakDemand.get(regionId) ?? 0, demand));
+
+    const prev = latestInterval.get(regionId) ?? "";
+    if (dt > prev) {
+      latestInterval.set(regionId, dt);
+      currentDemand.set(regionId, demand);
+    }
+  }
+
+  // Also check P5MIN for more recent demand
+  const p5Rows = getTable(p5Data[0], "REGIONSOLUTION");
+  for (const r of p5Rows) {
+    const regionId = r.REGIONID;
+    if (!REGION_IDS.includes(regionId)) continue;
+    const demand = num(r.TOTALDEMAND);
+    const dt = r.INTERVAL_DATETIME || "";
+
+    peakDemand.set(regionId, Math.max(peakDemand.get(regionId) ?? 0, demand));
+
+    const prev = latestInterval.get(regionId) ?? "";
+    if (dt > prev) {
+      latestInterval.set(regionId, dt);
+      currentDemand.set(regionId, demand);
+    }
+  }
+
+  // --- Renewables from DISPATCH_UNIT_SCADA + CDEII ---
+  const scadaRows = getTable(scadaData[0], "DISPATCH_UNIT_SCADA", "UNIT_SCADA");
+  const windByRegion = new Map<string, number>();
+  const solarByRegion = new Map<string, number>();
+
+  for (const r of scadaRows) {
+    const duid = r.DUID;
+    const mw = num(r.SCADAVALUE);
+    if (mw <= 0) continue;
+
+    const info = duidInfo.get(duid);
+    if (!info || !info.region) continue;
+
+    if (info.fuel === "Wind") {
+      windByRegion.set(info.region, (windByRegion.get(info.region) ?? 0) + mw);
+    } else if (info.fuel === "Solar") {
+      solarByRegion.set(info.region, (solarByRegion.get(info.region) ?? 0) + mw);
+    }
+  }
+
+  // --- Rooftop PV ---
+  const rooftopByRegion = new Map<string, number>();
+  if (rooftopData) {
+    // Get latest actual per region, fall back to forecast
+    const actualRows: Record<string, string>[] = [];
+    for (const file of rooftopData.actualFiles) {
+      actualRows.push(...getTable(file, "ROOFTOP_PV_ACTUAL", "ROOFTOP_ACTUAL", "ACTUAL"));
+    }
+
+    // Find the latest actual per region
+    const latestActual = new Map<string, { dt: string; mw: number }>();
+    for (const r of actualRows) {
+      const dt = r.INTERVAL_DATETIME || r.SETTLEMENTDATE || "";
+      const regionId = r.REGIONID;
+      const mw = num(r.POWER || r.GENERATION || r.MW || "0");
+      const prev = latestActual.get(regionId);
+      if (!prev || dt > prev.dt) {
+        latestActual.set(regionId, { dt, mw });
+      }
+    }
+
+    for (const [regionId, { mw }] of latestActual) {
+      rooftopByRegion.set(regionId, mw);
+    }
+
+    // If no actual, try forecast
+    if (rooftopByRegion.size === 0) {
+      const forecastRows = getTable(rooftopData.forecastFiles[0], "ROOFTOP_PV_FORECAST", "ROOFTOP_FORECAST", "FORECAST", "REGIONFORECAST");
+      const latestForecast = new Map<string, { dt: string; mw: number }>();
+      for (const r of forecastRows) {
+        const dt = r.INTERVAL_DATETIME || r.SETTLEMENTDATE || "";
+        const regionId = r.REGIONID;
+        const mw = num(r.POWER || r.GENERATION || r.POWERMEAN || r.MW || "0");
+        const prev = latestForecast.get(regionId);
+        if (!prev || dt > prev.dt) {
+          latestForecast.set(regionId, { dt, mw });
+        }
+      }
+      for (const [regionId, { mw }] of latestForecast) {
+        rooftopByRegion.set(regionId, mw);
+      }
+    }
+  }
+
+  // --- Build region summaries ---
+  const regionLabels: Record<string, string> = { NSW1: "NSW", QLD1: "QLD", VIC1: "VIC", SA1: "SA" };
+  const regions: MarketRegionSummary[] = REGION_IDS.map((id) => {
+    const wind = Math.round(windByRegion.get(id) ?? 0);
+    const solar = Math.round(solarByRegion.get(id) ?? 0);
+    const rooftop = Math.round(rooftopByRegion.get(id) ?? 0);
+    return {
+      region: regionLabels[id] ?? id,
+      peakDemand: Math.round(peakDemand.get(id) ?? 0),
+      currentDemand: Math.round(currentDemand.get(id) ?? 0),
+      solarMW: solar,
+      windMW: wind,
+      rooftopPvMW: rooftop,
+      totalRenewablesMW: wind + solar + rooftop,
+    };
+  });
+
+  // --- Interconnectors at limits ---
+  const pdIcRows = getTable(pdData[0], "INTERCONNECTOR_SOLN", "INTERCONNECTORSOLN");
+  const icStats = new Map<string, {
+    atLimit: number; total: number; flowSum: number; direction: string;
+    bindingTimes: string[];  // sorted interval datetimes where binding
+    allTimes: string[];      // all interval datetimes
+  }>();
+
+  for (const r of pdIcRows) {
+    const icId = r.INTERCONNECTORID;
+    const flow = num(r.MWFLOW);
+    const importLimit = numOrNull(r.IMPORTLIMIT);
+    const exportLimit = numOrNull(r.EXPORTLIMIT);
+    const dt = r.DATETIME || r.INTERVAL_DATETIME || "";
+
+    const stats = icStats.get(icId) ?? { atLimit: 0, total: 0, flowSum: 0, direction: "", bindingTimes: [], allTimes: [] };
+    stats.total++;
+    stats.flowSum += flow;
+    stats.allTimes.push(dt);
+
+    // Check if flow is at or near the limit (within 5% or 20MW)
+    const threshold = 20;
+    const atImportLimit = importLimit !== null && importLimit > 0 && flow >= importLimit - threshold;
+    const atExportLimit = exportLimit !== null && exportLimit < 0 && flow <= exportLimit + threshold;
+    const atExportLimit2 = exportLimit !== null && exportLimit > 0 && Math.abs(flow) >= exportLimit - threshold;
+
+    if (atImportLimit) {
+      stats.atLimit++;
+      stats.direction = flow > 0 ? "south" : "north";
+      stats.bindingTimes.push(dt);
+    } else if (atExportLimit || atExportLimit2) {
+      stats.atLimit++;
+      stats.direction = flow < 0 ? "north" : "south";
+      stats.bindingTimes.push(dt);
+    }
+
+    icStats.set(icId, stats);
+  }
+
+  // Helper to extract time and format as h:MMam/pm from datetime string
+  function toAmPm(dt: string): string {
+    const m = dt.match(/(\d{2}):(\d{2})(?::(\d{2}))?/);
+    if (!m) return dt;
+    let hour = parseInt(m[1]);
+    const min = m[2];
+    const ampm = hour >= 12 ? "pm" : "am";
+    if (hour === 0) hour = 12;
+    else if (hour > 12) hour -= 12;
+    return `${hour}:${min}${ampm}`;
+  }
+
+  function buildBindingDescription(bindingTimes: string[], totalIntervals: number): { from: string; to: string; description: string } {
+    if (bindingTimes.length === 0) return { from: "", to: "", description: "" };
+    const sorted = [...bindingTimes].sort();
+    const from = toAmPm(sorted[0]);
+    const to = toAmPm(sorted[sorted.length - 1]);
+    // If binding for >90% of intervals, call it "all day"
+    if (bindingTimes.length >= totalIntervals * 0.9) {
+      return { from, to, description: "all day" };
+    }
+    return { from, to, description: `from ${from} to ${to}` };
+  }
+
+  const interconnectors: MarketICBinding[] = [];
+  for (const [icId, stats] of icStats) {
+    if (stats.atLimit < 2) continue;
+    const avgFlow = stats.flowSum / stats.total;
+    const { from, to, description } = buildBindingDescription(stats.bindingTimes, stats.total);
+    interconnectors.push({
+      interconnectorId: icId,
+      name: IC_NAMES[icId] ?? icId,
+      direction: stats.direction || (avgFlow > 0 ? "south" : "north"),
+      intervals: stats.atLimit,
+      totalIntervals: stats.total,
+      avgFlowMW: Math.round(avgFlow),
+      bindingFrom: from,
+      bindingTo: to,
+      bindingDescription: description,
+    });
+  }
+
+  interconnectors.sort((a, b) => b.intervals - a.intervals);
+
+  // --- Outage detection from PDPASA DUID Availability ---
+  // Build current output map from SCADA
+  const scadaOutput = new Map<string, number>();
+  for (const r of scadaRows) {
+    scadaOutput.set(r.DUID, num(r.SCADAVALUE));
+  }
+
+  // Parse PDPASA DUID availability
+  // Track per-DUID: max of GENERATION_MAX_AVAILABILITY and min of GENERATION_PASA_AVAILABILITY
+  const pasaMax = new Map<string, number>();
+  const pasaMinAvail = new Map<string, number>();
+  if (pdpasaDuidData) {
+    const availRows = getTable(
+      pdpasaDuidData[0],
+      "DUIDAVAILABILITY", "PDPASA_DUIDAVAILABILITY",
+    );
+    for (const r of availRows) {
+      const duid = r.DUID;
+      const maxA = num(r.GENERATION_MAX_AVAILABILITY);
+      const pasaA = num(r.GENERATION_PASA_AVAILABILITY);
+
+      pasaMax.set(duid, Math.max(pasaMax.get(duid) ?? 0, maxA));
+      const existing = pasaMinAvail.get(duid);
+      pasaMinAvail.set(duid, existing !== undefined ? Math.min(existing, pasaA) : pasaA);
+    }
+  }
+
+  const THERMAL_FUELS = new Set(["Coal", "Gas"]);
+  const outages: MarketOutage[] = [];
+
+  // Check all thermal DUIDs from CDEII against PDPASA availability
+  for (const [duid, info] of duidInfo) {
+    if (!THERMAL_FUELS.has(info.fuel)) continue;
+
+    const maxAvail = pasaMax.get(duid);
+    const minAvail = pasaMinAvail.get(duid);
+    if (maxAvail === undefined) continue; // not in PDPASA
+
+    const scadaMW = scadaOutput.get(duid) ?? 0;
+
+    // Case 1: Full outage — PASA max availability is 0 (AEMO sets this when unit is out)
+    if (maxAvail === 0) {
+      outages.push({
+        duid,
+        stationName: info.stationName || duid,
+        region: info.region,
+        fuel: info.fuel,
+        maxCapacity: 0,
+        availableMW: 0,
+        currentOutput: Math.round(scadaMW),
+        reductionMW: 0,
+        type: "full",
+      });
+      continue;
+    }
+
+    // Case 2: Partial or full outage — PASA availability significantly below max
+    if (maxAvail > 30 && minAvail !== undefined && minAvail < maxAvail * 0.7) {
+      // If minAvail is 0, unit is fully out in some intervals — treat as full outage
+      const isFullOutage = minAvail === 0;
+      outages.push({
+        duid,
+        stationName: info.stationName || duid,
+        region: info.region,
+        fuel: info.fuel,
+        maxCapacity: Math.round(maxAvail),
+        availableMW: Math.round(minAvail),
+        currentOutput: Math.round(scadaMW),
+        reductionMW: Math.round(maxAvail - minAvail),
+        type: isFullOutage ? "full" : "partial",
+      });
+    }
+  }
+
+  // Sort: full outages first, then by reduction size desc
+  outages.sort((a, b) => {
+    if (a.type !== b.type) return a.type === "full" ? -1 : 1;
+    return b.reductionMW - a.reductionMW;
+  });
+
+  const result: MarketSummaryResult = {
+    regions,
+    interconnectors,
+    outages,
+    temps,
+    timestamp: new Date().toISOString(),
+  };
+
+  return setCache("marketSummary", result);
 }
 
 // =======================================================================

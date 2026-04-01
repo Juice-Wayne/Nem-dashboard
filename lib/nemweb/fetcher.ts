@@ -142,7 +142,9 @@ export const SOURCES = {
   // Analytics sources
   dispatchScada: { path: "/Reports/Current/Dispatch_SCADA/", count: 1 },
   bidmove: { path: "/Reports/Current/Bidmove_Complete/", count: 1 },
-  stpasa: { path: "/Reports/Current/STPASA_Reports/", count: 1 },
+  stpasa: { path: "/Reports/Current/Short_Term_PASA_Reports/", count: 1 },
+  stpasaDuid: { path: "/Reports/Current/STPASA_DUIDAvailability/", count: 1 },
+  pdpasaDuid: { path: "/Reports/Current/PDPASA_DUIDAvailability/", count: 1 },
   rooftopPvActual: { path: "/Reports/Current/Rooftop_PV/Actual/", count: 12 },
   rooftopPvForecast: { path: "/Reports/Current/Rooftop_PV/Forecast/", count: 1 },
 } as const;
@@ -223,6 +225,68 @@ export async function getDuidFuelMap(): Promise<Map<string, FuelCategory>> {
     }
 
     duidFuelCache = { data: map, expiry: Date.now() + FUEL_TTL };
+    return map;
+  });
+}
+
+export interface DuidInfo {
+  fuel: FuelCategory;
+  region: string;
+  capacity: number;    // registered capacity MW (0 if unknown)
+  stationName: string;
+}
+
+/** Fetch DUID → { fuel, region, capacity, stationName } mapping from AEMO CDEII Available Generators */
+let duidInfoCache: { data: Map<string, DuidInfo>; expiry: number } | null = null;
+
+export async function getDuidInfoMap(): Promise<Map<string, DuidInfo>> {
+  if (duidInfoCache && Date.now() < duidInfoCache.expiry) return duidInfoCache.data;
+
+  return dedup("duid-info", async () => {
+    const url = `${BASE}/Reports/Current/CDEII/CO2EII_AVAILABLE_GENERATORS.CSV`;
+    const res = await fetchWithRetry(url);
+    const text = await res.text();
+
+    const map = new Map<string, DuidInfo>();
+    const lines = text.split("\n");
+
+    let duidIdx = -1;
+    let sourceIdx = -1;
+    let regionIdx = -1;
+    let capIdx = -1;
+    let nameIdx = -1;
+
+    for (const line of lines) {
+      const cols = line.split(",").map((c) => c.trim().replace(/^"|"$/g, ""));
+      if (cols[0] === "I") {
+        duidIdx = cols.indexOf("DUID");
+        sourceIdx = cols.indexOf("CO2E_ENERGY_SOURCE");
+        regionIdx = cols.indexOf("REGIONID");
+        // Try common capacity column names
+        capIdx = cols.indexOf("REGISTEREDCAPACITY");
+        if (capIdx < 0) capIdx = cols.indexOf("CO2E_EMISSIONS_INTENSITY");
+        if (capIdx < 0) capIdx = cols.indexOf("MAXCAPACITY");
+        nameIdx = cols.indexOf("STATIONNAME");
+        if (nameIdx < 0) nameIdx = cols.indexOf("STATION_NAME");
+      } else if (cols[0] === "D" && duidIdx >= 0 && sourceIdx >= 0) {
+        const duid = cols[duidIdx];
+        const source = cols[sourceIdx];
+        const region = regionIdx >= 0 ? cols[regionIdx] : "";
+        const capRaw = capIdx >= 0 ? cols[capIdx] : "";
+        const cap = Number(capRaw);
+        const name = nameIdx >= 0 ? cols[nameIdx] : "";
+        if (duid && source) {
+          map.set(duid, {
+            fuel: ENERGY_SOURCE_TO_CATEGORY[source] ?? "Other",
+            region: region || "",
+            capacity: isNaN(cap) ? 0 : cap,
+            stationName: name,
+          });
+        }
+      }
+    }
+
+    duidInfoCache = { data: map, expiry: Date.now() + FUEL_TTL };
     return map;
   });
 }
