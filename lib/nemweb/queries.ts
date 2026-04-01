@@ -1336,10 +1336,8 @@ export async function getMarketSummary(): Promise<MarketSummaryResult> {
       continue;
     }
 
-    // Case 2: Partial or full outage — PASA availability significantly below max
+    // Case 2: Partial outage — PASA availability < max availability by >30%
     if (maxAvail > 30 && minAvail !== undefined && minAvail < maxAvail * 0.7) {
-      // If minAvail is 0, unit is fully out in some intervals — treat as full outage
-      const isFullOutage = minAvail === 0;
       outages.push({
         duid,
         stationName: info.stationName || duid,
@@ -1349,7 +1347,7 @@ export async function getMarketSummary(): Promise<MarketSummaryResult> {
         availableMW: Math.round(minAvail),
         currentOutput: Math.round(scadaMW),
         reductionMW: Math.round(maxAvail - minAvail),
-        type: isFullOutage ? "full" : "partial",
+        type: "partial",
       });
     }
   }
