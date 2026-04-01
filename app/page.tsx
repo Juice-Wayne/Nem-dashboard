@@ -2139,11 +2139,11 @@ function buildMarketText(market: MarketSummaryData, manual: MarketManualData): s
     }
   }
 
-  const nonSaOutages = (market.outages ?? []).filter((o) => !o.region.startsWith("SA"));
-  if (nonSaOutages.length > 0) {
+  const filteredOutages = (market.outages ?? []).filter((o) => !o.region.startsWith("SA") && !o.region.startsWith("TAS"));
+  if (filteredOutages.length > 0) {
     lines.push("", "Outages");
-    const byRegion = new Map<string, typeof nonSaOutages>();
-    for (const o of nonSaOutages) {
+    const byRegion = new Map<string, typeof filteredOutages>();
+    for (const o of filteredOutages) {
       const key = o.region.replace("1", "");
       if (!byRegion.has(key)) byRegion.set(key, []);
       byRegion.get(key)!.push(o);
