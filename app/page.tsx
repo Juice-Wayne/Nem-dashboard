@@ -414,10 +414,10 @@ export default function HomePage() {
               className={cn(
                 "flex items-center justify-center h-8 w-8 rounded-lg transition-all duration-150",
                 "text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.04]",
-                isRefreshing && "animate-spin text-zinc-400",
+                isRefreshing && "text-zinc-400",
               )}
             >
-              <RefreshCw className="h-4 w-4" />
+              <RefreshCw className={cn("h-4 w-4", isRefreshing && "animate-spin")} />
             </button>
           </div>
 
