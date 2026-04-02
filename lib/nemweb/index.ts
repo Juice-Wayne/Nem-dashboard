@@ -23,7 +23,7 @@ export {
   clearResultCache,
 } from "./queries";
 
-export type { RebidEntry, PriceSpikeEntry, StartCostResult, StartCostConfig, StartAnalysis, StartInterval, MarketSummaryResult, MarketRegionSummary, MarketICBinding, MarketOutage, MarketTemps } from "./queries";
+export type { RebidEntry, PriceSpikeEntry, StartCostResult, StartCostConfig, StartAnalysis, StartInterval, MarketSummaryResult, MarketRegionSummary, MarketICBinding, MarketOutage, MarketUpcomingOutage, MarketTemps } from "./queries";
 export { DEFAULT_START_COST_CONFIG } from "./queries";
 
 export { clearDirCache, getDuidFuelMap, getDuidInfoMap } from "./fetcher";
