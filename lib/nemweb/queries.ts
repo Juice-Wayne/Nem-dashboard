@@ -994,6 +994,17 @@ export interface MarketOutage {
   currentOutput: number;       // current SCADA output
   reductionMW: number;         // maxCapacity - availableMW
   type: "full" | "partial";
+  expectedReturn: string | null; // first PDPASA interval where availability returns, null if beyond horizon
+}
+
+export interface MarketUpcomingOutage {
+  duid: string;
+  stationName: string;
+  region: string;
+  fuel: string;
+  maxCapacity: number;
+  outageStart: string;           // first interval where availability drops
+  expectedReturn: string | null; // first interval where availability returns
 }
 
 export interface MarketTemps {
@@ -1003,6 +1014,7 @@ export interface MarketTemps {
 export interface MarketSummaryResult {
   regions: MarketRegionSummary[];
   interconnectors: MarketICBinding[];
+  upcomingOutages: MarketUpcomingOutage[];
   outages: MarketOutage[];
   temps: MarketTemps;
   timestamp: string;
@@ -1058,7 +1070,7 @@ export async function getMarketSummary(): Promise<MarketSummaryResult> {
   if (cached) return cached;
 
   // Fetch all data in parallel (including weather temps)
-  const [p5Data, pdData, scadaData, duidInfo, rooftopData, pdpasaDuidData, temps] = await Promise.all([
+  const [p5Data, pdData, scadaData, duidInfo, rooftopData, pdpasaDuidData, mtpasaDuidData, temps] = await Promise.all([
     fetchLatest(SOURCES.p5min),
     fetchLatest(SOURCES.predispatch),
     fetchLatest(SOURCES.dispatchScada),
@@ -1073,6 +1085,7 @@ export async function getMarketSummary(): Promise<MarketSummaryResult> {
       } catch { return null; }
     })(),
     fetchLatest(SOURCES.pdpasaDuid).catch(() => null),
+    fetchLatest(SOURCES.mtpasaDuid).catch(() => null),
     fetchCapitalTemps(),
   ]);
 
@@ -1288,23 +1301,99 @@ export async function getMarketSummary(): Promise<MarketSummaryResult> {
   }
 
   // Parse PDPASA DUID availability
-  // Track per-DUID: max of GENERATION_MAX_AVAILABILITY and min of GENERATION_PASA_AVAILABILITY
-  const pasaMax = new Map<string, number>();
-  const pasaMinAvail = new Map<string, number>();
+  // Use nearest interval for "is it out NOW", all intervals for return dates
+  const pasaMaxToday = new Map<string, number>();    // max availability across today
+  const pasaNearestAvail = new Map<string, number>(); // availability at nearest future interval
+  // All intervals per DUID sorted by time — for scanning return dates
+  const pasaAllIntervals = new Map<string, { interval: string; pasaA: number; maxA: number }[]>();
+
   if (pdpasaDuidData) {
     const availRows = getTable(
       pdpasaDuidData[0],
       "DUIDAVAILABILITY", "PDPASA_DUIDAVAILABILITY",
     );
+
+    // Current time string in AEMO format for comparison
+    const nowAEST = new Date(new Date().toLocaleString("en-US", { timeZone: "Australia/Brisbane" }));
+    const yy = nowAEST.getFullYear();
+    const mm = String(nowAEST.getMonth() + 1).padStart(2, "0");
+    const dd = String(nowAEST.getDate()).padStart(2, "0");
+    const hh = String(nowAEST.getHours()).padStart(2, "0");
+    const mi = String(nowAEST.getMinutes()).padStart(2, "0");
+    const nowStr = `${yy}/${mm}/${dd} ${hh}:${mi}`;
+    const todayStr = `${yy}/${mm}/${dd}`;
+    const tomorrowDate = new Date(nowAEST);
+    tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+    const ty = tomorrowDate.getFullYear();
+    const tm = String(tomorrowDate.getMonth() + 1).padStart(2, "0");
+    const td = String(tomorrowDate.getDate()).padStart(2, "0");
+    const tomorrowStr = `${ty}/${tm}/${td}`;
+
+    // Track nearest future interval per DUID
+    const nearestInterval = new Map<string, string>();
+
     for (const r of availRows) {
+      const interval = r.INTERVAL_DATETIME || "";
       const duid = r.DUID;
       const maxA = num(r.GENERATION_MAX_AVAILABILITY);
       const pasaA = num(r.GENERATION_PASA_AVAILABILITY);
 
-      pasaMax.set(duid, Math.max(pasaMax.get(duid) ?? 0, maxA));
-      const existing = pasaMinAvail.get(duid);
-      pasaMinAvail.set(duid, existing !== undefined ? Math.min(existing, pasaA) : pasaA);
+      // Store all intervals for return date scanning
+      if (!pasaAllIntervals.has(duid)) pasaAllIntervals.set(duid, []);
+      pasaAllIntervals.get(duid)!.push({ interval, pasaA, maxA });
+
+      // Track nearest future interval per DUID
+      if (interval >= nowStr) {
+        const prev = nearestInterval.get(duid);
+        if (!prev || interval < prev) {
+          nearestInterval.set(duid, interval);
+          pasaNearestAvail.set(duid, pasaA);
+        }
+      }
+
+      // Track max availability across today for capacity reference
+      const intervalDate = interval.slice(0, 10);
+      const isToday = intervalDate === todayStr || (intervalDate === tomorrowStr && interval.slice(11, 16) <= "04:00");
+      if (!isToday) continue;
+      pasaMaxToday.set(duid, Math.max(pasaMaxToday.get(duid) ?? 0, maxA));
     }
+
+  }
+
+  // Add MT PASA intervals for longer-horizon return date scanning
+  if (mtpasaDuidData) {
+    const mtRows = getTable(
+      mtpasaDuidData[0],
+      "DUIDAVAILABILITY", "MTPASA_DUIDAVAILABILITY",
+    );
+    for (const r of mtRows) {
+      const interval = r.DAY || r.INTERVAL_DATETIME || "";
+      const duid = r.DUID;
+      const pasaA = num(r.PASAAVAILABILITY ?? r.GENERATION_PASA_AVAILABILITY);
+
+      if (!pasaAllIntervals.has(duid)) pasaAllIntervals.set(duid, []);
+      pasaAllIntervals.get(duid)!.push({ interval, pasaA, maxA: pasaA });
+    }
+  }
+
+  // Sort each DUID's intervals chronologically
+  {
+    for (const intervals of pasaAllIntervals.values()) {
+      intervals.sort((a, b) => a.interval.localeCompare(b.interval));
+    }
+  }
+
+  // Find expected return: first future interval where availability > 0 after being out
+  function findExpectedReturn(duid: string): string | null {
+    const intervals = pasaAllIntervals.get(duid);
+    if (!intervals) return null;
+    // Find first interval where PASA availability returns (> 5MW threshold)
+    let seenOutage = false;
+    for (const iv of intervals) {
+      if (iv.pasaA <= 5) { seenOutage = true; continue; }
+      if (seenOutage) return iv.interval;
+    }
+    return null; // doesn't return within PDPASA horizon
   }
 
   const THERMAL_FUELS = new Set(["Coal", "Gas"]);
@@ -1314,40 +1403,35 @@ export async function getMarketSummary(): Promise<MarketSummaryResult> {
   for (const [duid, info] of duidInfo) {
     if (!THERMAL_FUELS.has(info.fuel)) continue;
 
-    const maxAvail = pasaMax.get(duid);
-    const minAvail = pasaMinAvail.get(duid);
-    if (maxAvail === undefined) continue; // not in PDPASA
+    const maxToday = pasaMaxToday.get(duid);
+    const nearestAvail = pasaNearestAvail.get(duid);
+    if (maxToday === undefined && nearestAvail === undefined) continue; // not in PDPASA
 
     const scadaMW = scadaOutput.get(duid) ?? 0;
 
-    // Case 1: Full outage — PASA max availability is 0 (AEMO sets this when unit is out)
-    if (maxAvail === 0) {
+    // Skip units currently generating — SCADA confirms they're online
+    if (scadaMW > 5) continue;
+
+    // Skip units available RIGHT NOW — nearest interval shows availability
+    // (catches units like HUNTER1/2 that have future planned outages but are available now)
+    if (nearestAvail !== undefined && nearestAvail > 5) continue;
+
+    // Use max availability across today as the unit's capacity reference
+    const capacity = maxToday ?? 0;
+
+    // Full outage — nearest interval availability is 0
+    if (nearestAvail !== undefined && nearestAvail <= 5) {
       outages.push({
         duid,
         stationName: info.stationName || duid,
         region: info.region,
         fuel: info.fuel,
-        maxCapacity: 0,
+        maxCapacity: Math.round(capacity),
         availableMW: 0,
         currentOutput: Math.round(scadaMW),
-        reductionMW: 0,
-        type: "full",
-      });
-      continue;
-    }
-
-    // Case 2: Partial outage — PASA availability < max availability by >30%
-    if (maxAvail > 30 && minAvail !== undefined && minAvail < maxAvail * 0.7) {
-      outages.push({
-        duid,
-        stationName: info.stationName || duid,
-        region: info.region,
-        fuel: info.fuel,
-        maxCapacity: Math.round(maxAvail),
-        availableMW: Math.round(minAvail),
-        currentOutput: Math.round(scadaMW),
-        reductionMW: Math.round(maxAvail - minAvail),
-        type: "partial",
+        reductionMW: Math.round(capacity),
+        type: capacity > 0 && nearestAvail > 0 ? "partial" : "full",
+        expectedReturn: findExpectedReturn(duid),
       });
     }
   }
@@ -1358,10 +1442,53 @@ export async function getMarketSummary(): Promise<MarketSummaryResult> {
     return b.reductionMW - a.reductionMW;
   });
 
+  // --- Upcoming outages: units available now but with future planned outages ---
+  const upcomingOutages: MarketUpcomingOutage[] = [];
+  const currentOutageDuids = new Set(outages.map((o) => o.duid));
+
+  for (const [duid, info] of duidInfo) {
+    if (!THERMAL_FUELS.has(info.fuel)) continue;
+    if (currentOutageDuids.has(duid)) continue; // already flagged as current outage
+
+    const intervals = pasaAllIntervals.get(duid);
+    if (!intervals || intervals.length === 0) continue;
+
+    // Find first future interval where availability drops to 0
+    let outageStart: string | null = null;
+    let outageEnd: string | null = null;
+    for (let i = 0; i < intervals.length; i++) {
+      const iv = intervals[i];
+      if (iv.pasaA <= 5 && iv.maxA > 30) {
+        if (!outageStart) outageStart = iv.interval;
+        // Keep scanning for return
+      } else if (outageStart && !outageEnd && iv.pasaA > 5) {
+        outageEnd = iv.interval;
+        break;
+      }
+    }
+
+    if (outageStart) {
+      const maxCap = Math.max(...intervals.map((iv) => iv.maxA));
+      upcomingOutages.push({
+        duid,
+        stationName: info.stationName || duid,
+        region: info.region,
+        fuel: info.fuel,
+        maxCapacity: Math.round(maxCap),
+        outageStart,
+        expectedReturn: outageEnd,
+      });
+    }
+  }
+
+  // Sort by outage start date
+  upcomingOutages.sort((a, b) => a.outageStart.localeCompare(b.outageStart));
+
   const result: MarketSummaryResult = {
     regions,
     interconnectors,
     outages,
+    upcomingOutages,
     temps,
     timestamp: new Date().toISOString(),
   };

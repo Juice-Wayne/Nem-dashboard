@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useMemo, useCallback } from "react";
-import { Copy, Check, RefreshCw, Sun, Moon, Pencil, Save, Plus, X, Thermometer, Wind, Zap, ArrowLeftRight, AlertTriangle } from "lucide-react";
+import { Copy, Check, RefreshCw, Sun, Moon, Pencil, Save, Plus, X, Thermometer, Wind, Zap, ArrowLeftRight, AlertTriangle, Clock } from "lucide-react";
 import useSWR from "swr";
 import { cn } from "@/lib/utils";
 import { useAutoRefresh } from "@/lib/hooks/use-auto-refresh";
@@ -2045,6 +2045,7 @@ interface MarketOutageUI {
   availableMW: number;
   reductionMW: number;
   type: "full" | "partial";
+  expectedReturn: string | null;
 }
 
 interface MarketRegionSummaryUI {
@@ -2069,10 +2070,21 @@ interface MarketICBindingUI {
   bindingDescription: string;
 }
 
+interface MarketUpcomingOutageUI {
+  duid: string;
+  stationName: string;
+  region: string;
+  fuel: string;
+  maxCapacity: number;
+  outageStart: string;
+  expectedReturn: string | null;
+}
+
 interface MarketSummaryData {
   regions: MarketRegionSummaryUI[];
   interconnectors: MarketICBindingUI[];
   outages: MarketOutageUI[];
+  upcomingOutages: MarketUpcomingOutageUI[];
   temps: Record<string, number | null>;
   timestamp: string;
 }
@@ -2149,10 +2161,43 @@ function buildMarketText(market: MarketSummaryData, manual: MarketManualData): s
       byRegion.get(key)!.push(o);
     }
     for (const [region, outages] of byRegion) {
-      const items = outages.map((o) => {
-        return o.type === "full" ? `${o.duid}: outage` : `${o.duid}: partial outage (${o.availableMW}/${o.maxCapacity}MW)`;
-      });
-      lines.push(`${region}: ${items.join(", ")}`);
+      lines.push(`--- ${region} ---`);
+      for (const o of outages) {
+        const label = o.type === "full" ? "outage" : `partial outage (${o.availableMW}/${o.maxCapacity}MW)`;
+        if (o.expectedReturn) {
+          const d = new Date(o.expectedReturn);
+          const returnStr = d.toLocaleDateString("en-AU", { timeZone: "Australia/Brisbane", day: "numeric", month: "short" });
+          lines.push(`${o.duid}: ${label} till ${returnStr}`);
+        } else {
+          lines.push(`${o.duid}: ${label}`);
+        }
+      }
+    }
+  }
+
+  // Upcoming outages (exclude SA and TAS)
+  const filteredUpcoming = (market.upcomingOutages ?? []).filter((o) => !o.region.startsWith("SA") && !o.region.startsWith("TAS"));
+  if (filteredUpcoming.length > 0) {
+    lines.push("", "Expected");
+    const byRegionUp = new Map<string, typeof filteredUpcoming>();
+    for (const o of filteredUpcoming) {
+      const key = o.region.replace("1", "");
+      if (!byRegionUp.has(key)) byRegionUp.set(key, []);
+      byRegionUp.get(key)!.push(o);
+    }
+    for (const [region, upcoming] of byRegionUp) {
+      lines.push(`--- ${region} ---`);
+      for (const o of upcoming) {
+        const startD = new Date(o.outageStart.replace(/\//g, "-"));
+        const startStr = startD.toLocaleDateString("en-AU", { timeZone: "Australia/Brisbane", day: "numeric", month: "short" });
+        if (o.expectedReturn) {
+          const endD = new Date(o.expectedReturn.replace(/\//g, "-"));
+          const endStr = endD.toLocaleDateString("en-AU", { timeZone: "Australia/Brisbane", day: "numeric", month: "short" });
+          lines.push(`${o.duid}: out from ${startStr} to ${endStr}`);
+        } else {
+          lines.push(`${o.duid}: out from ${startStr}`);
+        }
+      }
     }
   }
 
@@ -2169,6 +2214,7 @@ function MarketAnalysisTab() {
   const market = marketRaw ? {
     ...marketRaw,
     outages: marketRaw.outages ?? [],
+    upcomingOutages: marketRaw.upcomingOutages ?? [],
     interconnectors: marketRaw.interconnectors ?? [],
     regions: marketRaw.regions ?? [],
     temps: marketRaw.temps ?? {},
@@ -2258,164 +2304,177 @@ function MarketAnalysisTab() {
   const summaryText = buildMarketText(market, manual);
 
   return (
-    <div className="space-y-4">
-      {/* Copyable text summary */}
-      <Card className="rounded-xl">
-        <CardContent className="py-3">
-          <div className="relative">
-            <div className="rounded-md border border-input bg-white/[0.03] p-3 pr-12 text-xs font-mono text-zinc-300 whitespace-pre-wrap break-words leading-relaxed">
-              {summaryText}
-            </div>
-            <Button variant="ghost" size="icon-sm" className="absolute top-2 right-2" onClick={handleCopy}>
-              {copied ? <Check className="h-4 w-4 text-emerald-400" /> : <Copy className="h-4 w-4" />}
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-
+    <div className="space-y-3">
+      {/* Header + copy button */}
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-medium text-zinc-400">
           Market Analysis — {new Date().toLocaleDateString("en-AU", { timeZone: "Australia/Brisbane", weekday: "short", day: "numeric", month: "short", year: "numeric" })}
         </h2>
-        <button onClick={startEdit} className="px-3 py-1.5 text-xs rounded-md font-medium text-zinc-400 hover:text-zinc-200 hover:bg-white/[0.04] transition-colors flex items-center gap-1.5">
-          <Pencil className="h-3.5 w-3.5" /> Temps & Notes
-        </button>
+        <Button variant="ghost" size="icon-sm" onClick={handleCopy}>
+          {copied ? <Check className="h-4 w-4 text-emerald-400" /> : <Copy className="h-4 w-4" />}
+        </Button>
       </div>
 
-      {/* Region cards — auto-generated from NEMWeb + manual temps */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-        {market.regions.map((r) => (
-          <div key={r.region} className={cn("rounded-xl border p-4 space-y-3", regionBg[r.region])}>
-            <div className={cn("text-sm font-semibold", regionText[r.region])}>{r.region}</div>
-            <div className="space-y-1.5">
-              {(() => {
-                const regionKey = r.region.replace("1", "");
-                const manualTemp = manual.temps[r.region] || manual.temps[regionKey];
-                const apiTemp = market.temps?.[regionKey];
-                const tempDisplay = manualTemp || (apiTemp != null ? `${apiTemp}°C` : null);
-                return tempDisplay ? (
-                  <div className="flex items-center gap-2">
-                    <Thermometer className="h-3.5 w-3.5 text-orange-400 shrink-0" />
-                    <span className="text-xs text-zinc-300">Max {tempDisplay}</span>
-                  </div>
-                ) : null;
-              })()}
-              {r.windMW > 0 && (
-                <div className="flex items-center gap-2">
-                  <Wind className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
-                  <span className="text-xs text-zinc-300 font-mono tabular-nums">
-                    {r.windMW.toLocaleString()} MW
-                    <span className="text-zinc-500 ml-1 font-sans">wind</span>
-                  </span>
-                </div>
-              )}
-              {(r.solarMW + r.rooftopPvMW) > 0 && (
-                <div className="flex items-center gap-2">
-                  <Sun className="h-3.5 w-3.5 text-yellow-400 shrink-0" />
-                  <span className="text-xs text-zinc-300 font-mono tabular-nums">
-                    {(r.solarMW + r.rooftopPvMW).toLocaleString()} MW
-                    <span className="text-zinc-500 ml-1 font-sans">solar</span>
-                  </span>
-                </div>
-              )}
-              <div className="flex items-center gap-2">
-                <Zap className="h-3.5 w-3.5 text-blue-400 shrink-0" />
-                <span className="text-xs text-zinc-300 font-mono tabular-nums">
-                  {r.peakDemand.toLocaleString()} MW
-                  <span className="text-zinc-500 ml-1 font-sans">peak demand</span>
-                </span>
-              </div>
-              <div className="flex items-center gap-2">
-                <Zap className="h-3.5 w-3.5 text-zinc-600 shrink-0" />
-                <span className="text-xs text-zinc-400 font-mono tabular-nums">
-                  {r.currentDemand.toLocaleString()} MW
-                  <span className="text-zinc-500 ml-1 font-sans">current</span>
-                </span>
-              </div>
-              {manual.notes[r.region] && (
-                <div className="text-[10px] text-zinc-500 mt-1">{manual.notes[r.region]}</div>
-              )}
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {/* Interconnectors at limits — auto-detected */}
-      {market.interconnectors.length > 0 && (
-        <Card className="rounded-xl">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm flex items-center gap-2">
-              <ArrowLeftRight className="h-4 w-4 text-zinc-400" /> Interconnectors at Limits
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex flex-wrap gap-2">
-              {market.interconnectors.map((ic) => (
-                <div key={ic.interconnectorId} className="inline-flex items-center gap-2 rounded-full border border-cyan-500/20 bg-cyan-500/10 px-3 py-1.5">
-                  <span className="text-xs font-semibold text-cyan-400 font-mono">{ic.name}</span>
-                  <span className="text-[11px] text-zinc-400">
-                    binding {ic.direction} {ic.bindingDescription || ""}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      )}
-      {market.interconnectors.length === 0 && (
-        <Card className="rounded-xl">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm flex items-center gap-2">
-              <ArrowLeftRight className="h-4 w-4 text-zinc-400" /> Interconnectors
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-xs text-zinc-500">No interconnectors detected at limits</div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Outages — auto-detected from NEMWeb */}
-      <Card className="rounded-xl">
-        <CardHeader className="pb-2">
-          <CardTitle className="text-sm flex items-center gap-2">
-            <AlertTriangle className="h-4 w-4 text-amber-400" /> Outages
-            <span className="text-[10px] text-zinc-600 font-normal ml-1">
-              Thermal units ({">"}30MW) with {">"}30% capacity reduction
-            </span>
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          {market.outages.length === 0 ? (
-            <div className="text-xs text-zinc-500">No thermal outages detected</div>
-          ) : (
-            <div className="flex flex-wrap gap-2">
-              {market.outages.map((o) => (
-                <div
-                  key={o.duid}
-                  className={cn(
-                    "inline-flex items-center gap-2 rounded-lg border px-3 py-1.5",
-                    o.type === "full"
-                      ? "border-rose-500/20 bg-rose-500/10"
-                      : "border-amber-500/20 bg-amber-500/10",
-                  )}
-                >
-                  <span className={cn(
-                    "text-xs font-bold font-mono",
-                    o.type === "full" ? "text-rose-400" : "text-amber-400",
-                  )}>{o.duid}</span>
-                  <span className="text-[11px] text-zinc-400">
-                    {o.type === "full" ? "out" : `${o.availableMW}/${o.maxCapacity}MW`}
-                    <span className="text-zinc-600 ml-1">
-                      {o.fuel} · {o.region.replace("1", "")}
+      {/* Two-column layout: data left, copyable text right */}
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr_1fr] gap-3 lg:items-stretch">
+        {/* Left column: regions, interconnectors, outages, upcoming */}
+        <div className="space-y-3">
+          {/* Region cards */}
+          <div className="grid grid-cols-2 gap-2">
+            {market.regions.map((r) => (
+              <div key={r.region} className={cn("rounded-lg border p-3 space-y-1.5", regionBg[r.region])}>
+                <div className={cn("text-xs font-semibold", regionText[r.region])}>{r.region}</div>
+                {(() => {
+                  const regionKey = r.region.replace("1", "");
+                  const manualTemp = manual.temps[r.region] || manual.temps[regionKey];
+                  const apiTemp = market.temps?.[regionKey];
+                  const tempDisplay = manualTemp || (apiTemp != null ? `${apiTemp}°C` : null);
+                  return tempDisplay ? (
+                    <div className="flex items-center gap-1.5">
+                      <Thermometer className="h-3 w-3 text-orange-400 shrink-0" />
+                      <span className="text-[11px] text-zinc-300">Max {tempDisplay}</span>
+                    </div>
+                  ) : null;
+                })()}
+                {r.windMW > 0 && (
+                  <div className="flex items-center gap-1.5">
+                    <Wind className="h-3 w-3 text-emerald-400 shrink-0" />
+                    <span className="text-[11px] text-zinc-300 font-mono tabular-nums">
+                      {r.windMW.toLocaleString()}
+                      <span className="text-zinc-500 ml-0.5 font-sans">MW wind</span>
                     </span>
+                  </div>
+                )}
+                {(r.solarMW + r.rooftopPvMW) > 0 && (
+                  <div className="flex items-center gap-1.5">
+                    <Sun className="h-3 w-3 text-yellow-400 shrink-0" />
+                    <span className="text-[11px] text-zinc-300 font-mono tabular-nums">
+                      {(r.solarMW + r.rooftopPvMW).toLocaleString()}
+                      <span className="text-zinc-500 ml-0.5 font-sans">MW solar</span>
+                    </span>
+                  </div>
+                )}
+                <div className="flex items-center gap-1.5">
+                  <Zap className="h-3 w-3 text-blue-400 shrink-0" />
+                  <span className="text-[11px] text-zinc-300 font-mono tabular-nums">
+                    {r.peakDemand.toLocaleString()}
+                    <span className="text-zinc-500 ml-0.5 font-sans">MW peak</span>
                   </span>
                 </div>
-              ))}
-            </div>
+                <div className="flex items-center gap-1.5">
+                  <Zap className="h-3 w-3 text-zinc-600 shrink-0" />
+                  <span className="text-[11px] text-zinc-400 font-mono tabular-nums">
+                    {r.currentDemand.toLocaleString()}
+                    <span className="text-zinc-500 ml-0.5 font-sans">MW now</span>
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Interconnectors */}
+          <Card className="rounded-lg">
+            <CardHeader className="py-2 px-3">
+              <CardTitle className="text-xs flex items-center gap-1.5">
+                <ArrowLeftRight className="h-3.5 w-3.5 text-zinc-400" /> Interconnectors
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="px-3 pb-3 pt-0">
+              {market.interconnectors.length === 0 ? (
+                <div className="text-[11px] text-zinc-500">No interconnectors at limits</div>
+              ) : (
+                <div className="flex flex-wrap gap-1.5">
+                  {market.interconnectors.map((ic) => (
+                    <div key={ic.interconnectorId} className="inline-flex items-center gap-1.5 rounded-full border border-cyan-500/20 bg-cyan-500/10 px-2.5 py-1">
+                      <span className="text-[11px] font-semibold text-cyan-400 font-mono">{ic.name}</span>
+                      <span className="text-[10px] text-zinc-400">
+                        {ic.direction} {ic.bindingDescription || ""}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Outages */}
+          <Card className="rounded-lg">
+            <CardHeader className="py-2 px-3">
+              <CardTitle className="text-xs flex items-center gap-1.5">
+                <AlertTriangle className="h-3.5 w-3.5 text-amber-400" /> Outages
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="px-3 pb-3 pt-0">
+              {market.outages.length === 0 ? (
+                <div className="text-[11px] text-zinc-500">No thermal outages detected</div>
+              ) : (
+                <div className="flex flex-wrap gap-1.5">
+                  {market.outages.map((o) => (
+                    <div
+                      key={o.duid}
+                      className={cn(
+                        "inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1",
+                        o.type === "full"
+                          ? "border-rose-500/20 bg-rose-500/10"
+                          : "border-amber-500/20 bg-amber-500/10",
+                      )}
+                    >
+                      <span className={cn(
+                        "text-[11px] font-bold font-mono",
+                        o.type === "full" ? "text-rose-400" : "text-amber-400",
+                      )}>{o.duid}</span>
+                      <span className="text-[10px] text-zinc-400">
+                        {o.type === "full" ? "out" : `${o.availableMW}/${o.maxCapacity}MW`}
+                        {o.expectedReturn && (
+                          <span className="text-zinc-500 ml-0.5">
+                            till {new Date(o.expectedReturn).toLocaleDateString("en-AU", { timeZone: "Australia/Brisbane", day: "numeric", month: "short" })}
+                          </span>
+                        )}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Upcoming outages */}
+          {market.upcomingOutages.length > 0 && (
+            <Card className="rounded-lg">
+              <CardHeader className="py-2 px-3">
+                <CardTitle className="text-xs flex items-center gap-1.5">
+                  <Clock className="h-3.5 w-3.5 text-zinc-400" /> Expected
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="px-3 pb-3 pt-0">
+                <div className="flex flex-wrap gap-1.5">
+                  {market.upcomingOutages.map((o) => {
+                    const startD = new Date(o.outageStart.replace(/\//g, "-"));
+                    const startStr = startD.toLocaleDateString("en-AU", { timeZone: "Australia/Brisbane", day: "numeric", month: "short" });
+                    const endStr = o.expectedReturn
+                      ? new Date(o.expectedReturn.replace(/\//g, "-")).toLocaleDateString("en-AU", { timeZone: "Australia/Brisbane", day: "numeric", month: "short" })
+                      : null;
+                    return (
+                      <div key={o.duid} className="inline-flex items-center gap-1.5 rounded-md border border-zinc-500/20 bg-zinc-500/10 px-2.5 py-1">
+                        <span className="text-[11px] font-bold font-mono text-zinc-300">{o.duid}</span>
+                        <span className="text-[10px] text-zinc-400">
+                          {startStr}{endStr ? ` → ${endStr}` : ""}
+                          <span className="text-zinc-600 ml-0.5">{o.region.replace("1", "")}</span>
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </CardContent>
+            </Card>
           )}
-        </CardContent>
-      </Card>
+        </div>
+
+        {/* Right column: copyable text summary — stretches to match left */}
+        <div className="rounded-lg border border-input bg-white/[0.03] p-3 text-[11px] font-mono text-zinc-300 whitespace-pre-wrap break-words leading-relaxed overflow-auto min-h-[300px]">
+          {summaryText}
+        </div>
+      </div>
     </div>
   );
 }

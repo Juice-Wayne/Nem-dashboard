@@ -145,6 +145,7 @@ export const SOURCES = {
   stpasa: { path: "/Reports/Current/Short_Term_PASA_Reports/", count: 1 },
   stpasaDuid: { path: "/Reports/Current/STPASA_DUIDAvailability/", count: 1 },
   pdpasaDuid: { path: "/Reports/Current/PDPASA_DUIDAvailability/", count: 1 },
+  mtpasaDuid: { path: "/Reports/Current/MTPASA_DUIDAvailability/", count: 1 },
   rooftopPvActual: { path: "/Reports/Current/Rooftop_PV/Actual/", count: 12 },
   rooftopPvForecast: { path: "/Reports/Current/Rooftop_PV/Forecast/", count: 1 },
 } as const;
