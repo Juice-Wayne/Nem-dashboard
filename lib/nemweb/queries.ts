@@ -1361,18 +1361,27 @@ export async function getMarketSummary(): Promise<MarketSummaryResult> {
   }
 
   // Add MT PASA intervals for longer-horizon return date scanning
+  // MT PASA has daily granularity with PASAAVAILABILITY (0 = out)
+  // We need maxA to reflect the unit's normal capacity, not its outage availability
   if (mtpasaDuidData) {
+    // Build max capacity per DUID from MT PASA (max PASAAVAILABILITY across all days)
+    const mtMaxCap = new Map<string, number>();
     const mtRows = getTable(
       mtpasaDuidData[0],
       "DUIDAVAILABILITY", "MTPASA_DUIDAVAILABILITY",
     );
+    for (const r of mtRows) {
+      const duid = r.DUID;
+      const pasaA = num(r.PASAAVAILABILITY ?? r.GENERATION_PASA_AVAILABILITY);
+      mtMaxCap.set(duid, Math.max(mtMaxCap.get(duid) ?? 0, pasaA));
+    }
     for (const r of mtRows) {
       const interval = r.DAY || r.INTERVAL_DATETIME || "";
       const duid = r.DUID;
       const pasaA = num(r.PASAAVAILABILITY ?? r.GENERATION_PASA_AVAILABILITY);
 
       if (!pasaAllIntervals.has(duid)) pasaAllIntervals.set(duid, []);
-      pasaAllIntervals.get(duid)!.push({ interval, pasaA, maxA: pasaA });
+      pasaAllIntervals.get(duid)!.push({ interval, pasaA, maxA: mtMaxCap.get(duid) ?? pasaA });
     }
   }
 
