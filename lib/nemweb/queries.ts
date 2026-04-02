@@ -966,8 +966,10 @@ export interface MarketRegionSummary {
   region: string;
   peakDemand: number;          // max TOTALDEMAND across all forecast intervals
   currentDemand: number;       // latest interval demand
-  solarMW: number;             // utility-scale solar + rooftop
-  windMW: number;              // utility-scale wind
+  solarMW: number;             // forecast peak utility-scale solar (UIGF)
+  solarNowMW: number;         // current utility-scale solar (SCADA)
+  windMW: number;              // forecast peak wind (UIGF)
+  windNowMW: number;          // current wind (SCADA)
   rooftopPvMW: number;         // rooftop PV (actual or forecast)
   totalRenewablesMW: number;   // wind + solar + rooftop
 }
@@ -1097,6 +1099,10 @@ export async function getMarketSummary(): Promise<MarketSummaryResult> {
   const currentDemand = new Map<string, number>();
   const latestInterval = new Map<string, string>();
 
+  // Also track peak solar/wind forecasts from predispatch UIGF
+  const peakSolarForecast = new Map<string, number>();
+  const peakWindForecast = new Map<string, number>();
+
   for (const r of pdRows) {
     const regionId = r.REGIONID;
     if (!REGION_IDS.includes(regionId)) continue;
@@ -1104,6 +1110,16 @@ export async function getMarketSummary(): Promise<MarketSummaryResult> {
     const dt = r.DATETIME || r.INTERVAL_DATETIME || "";
 
     peakDemand.set(regionId, Math.max(peakDemand.get(regionId) ?? 0, demand));
+
+    // SS_SOLAR_UIGF = unconstrained solar forecast (weather-based)
+    const solarUigf = num(r.SS_SOLAR_UIGF);
+    if (solarUigf > 0) {
+      peakSolarForecast.set(regionId, Math.max(peakSolarForecast.get(regionId) ?? 0, solarUigf));
+    }
+    const windUigf = num(r.SS_WIND_UIGF);
+    if (windUigf > 0) {
+      peakWindForecast.set(regionId, Math.max(peakWindForecast.get(regionId) ?? 0, windUigf));
+    }
 
     const prev = latestInterval.get(regionId) ?? "";
     if (dt > prev) {
@@ -1194,19 +1210,25 @@ export async function getMarketSummary(): Promise<MarketSummaryResult> {
   }
 
   // --- Build region summaries ---
+  // Use predispatch UIGF forecasts for peak solar/wind (weather-based forecast)
+  // Falls back to SCADA current output if no forecast available
   const regionLabels: Record<string, string> = { NSW1: "NSW", QLD1: "QLD", VIC1: "VIC", SA1: "SA" };
   const regions: MarketRegionSummary[] = REGION_IDS.map((id) => {
-    const wind = Math.round(windByRegion.get(id) ?? 0);
-    const solar = Math.round(solarByRegion.get(id) ?? 0);
+    const windPeak = Math.round(peakWindForecast.get(id) ?? windByRegion.get(id) ?? 0);
+    const windNow = Math.round(windByRegion.get(id) ?? 0);
+    const solarPeak = Math.round(peakSolarForecast.get(id) ?? solarByRegion.get(id) ?? 0);
+    const solarNow = Math.round(solarByRegion.get(id) ?? 0);
     const rooftop = Math.round(rooftopByRegion.get(id) ?? 0);
     return {
       region: regionLabels[id] ?? id,
       peakDemand: Math.round(peakDemand.get(id) ?? 0),
       currentDemand: Math.round(currentDemand.get(id) ?? 0),
-      solarMW: solar,
-      windMW: wind,
+      solarMW: solarPeak,
+      solarNowMW: solarNow,
+      windMW: windPeak,
+      windNowMW: windNow,
       rooftopPvMW: rooftop,
-      totalRenewablesMW: wind + solar + rooftop,
+      totalRenewablesMW: windPeak + solarPeak + rooftop,
     };
   });
 

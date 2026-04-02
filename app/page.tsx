@@ -2053,7 +2053,9 @@ interface MarketRegionSummaryUI {
   peakDemand: number;
   currentDemand: number;
   solarMW: number;
+  solarNowMW: number;
   windMW: number;
+  windNowMW: number;
   rooftopPvMW: number;
   totalRenewablesMW: number;
 }
@@ -2136,8 +2138,8 @@ function buildMarketText(market: MarketSummaryData, manual: MarketManualData): s
     } else if (apiTemp != null) {
       parts.push(`max temp ${apiTemp}°C`);
     }
-    if (r.windMW > 0) parts.push(`wind ~${r.windMW.toLocaleString()}MW`);
-    if (r.solarMW > 0) parts.push(`solar peaking ~${r.solarMW.toLocaleString()}MW`);
+    if (r.windMW > 0 || r.windNowMW > 0) parts.push(`wind ${r.windNowMW.toLocaleString()}/${r.windMW.toLocaleString()}MW`);
+    if (r.solarMW > 0 || r.solarNowMW > 0) parts.push(`solar ${r.solarNowMW.toLocaleString()}/${r.solarMW.toLocaleString()}MW`);
     parts.push(`demand ${r.peakDemand.toLocaleString()}MW`);
     if (manual.notes[r.region]) parts.push(manual.notes[r.region]);
     lines.push(`${r.region}: ${parts.join(", ")}`);
@@ -2341,19 +2343,23 @@ function MarketAnalysisTab() {
                     </div>
                   ) : null;
                 })()}
-                {r.windMW > 0 && (
+                {(r.windMW > 0 || r.windNowMW > 0) && (
                   <div className="flex items-center gap-1.5">
                     <Wind className="h-3 w-3 text-emerald-400 shrink-0" />
                     <span className="text-[11px] text-zinc-300 font-mono tabular-nums">
+                      {r.windNowMW.toLocaleString()}
+                      <span className="text-zinc-500 font-sans"> / </span>
                       {r.windMW.toLocaleString()}
                       <span className="text-zinc-500 ml-0.5 font-sans">MW wind</span>
                     </span>
                   </div>
                 )}
-                {r.solarMW > 0 && (
+                {(r.solarMW > 0 || r.solarNowMW > 0) && (
                   <div className="flex items-center gap-1.5">
                     <Sun className="h-3 w-3 text-yellow-400 shrink-0" />
                     <span className="text-[11px] text-zinc-300 font-mono tabular-nums">
+                      {r.solarNowMW.toLocaleString()}
+                      <span className="text-zinc-500 font-sans"> / </span>
                       {r.solarMW.toLocaleString()}
                       <span className="text-zinc-500 ml-0.5 font-sans">MW solar</span>
                     </span>
