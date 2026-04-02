@@ -2378,71 +2378,64 @@ function MarketAnalysisTab() {
           </div>
 
           {/* Interconnectors */}
-          <Card className="rounded-lg">
-            <CardHeader className="py-2 px-3">
-              <CardTitle className="text-xs flex items-center gap-1.5">
-                <ArrowLeftRight className="h-3.5 w-3.5 text-zinc-400" /> Interconnectors
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="px-3 pb-3 pt-0">
-              {market.interconnectors.length === 0 ? (
-                <div className="text-[11px] text-zinc-500">No interconnectors at limits</div>
-              ) : (
-                <div className="flex flex-wrap gap-1.5">
-                  {market.interconnectors.map((ic) => (
-                    <div key={ic.interconnectorId} className="inline-flex items-center gap-1.5 rounded-full border border-cyan-500/20 bg-cyan-500/10 px-2.5 py-1">
-                      <span className="text-[11px] font-semibold text-cyan-400 font-mono">{ic.name}</span>
-                      <span className="text-[10px] text-zinc-400">
-                        {ic.direction} {ic.bindingDescription || ""}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </CardContent>
-          </Card>
+          {/* Interconnectors */}
+          <div className="rounded-lg border bg-card p-2.5 space-y-1.5">
+            <div className="text-xs font-medium flex items-center gap-1.5 text-zinc-300">
+              <ArrowLeftRight className="h-3.5 w-3.5 text-zinc-400" /> Interconnectors
+            </div>
+            {market.interconnectors.length === 0 ? (
+              <div className="text-[11px] text-zinc-500">No interconnectors at limits</div>
+            ) : (
+              <div className="flex flex-wrap gap-1.5">
+                {market.interconnectors.map((ic) => (
+                  <div key={ic.interconnectorId} className="inline-flex items-center gap-1.5 rounded-full border border-cyan-500/20 bg-cyan-500/10 px-2.5 py-1">
+                    <span className="text-[11px] font-semibold text-cyan-400 font-mono">{ic.name}</span>
+                    <span className="text-[10px] text-zinc-400">
+                      {ic.direction} {ic.bindingDescription || ""}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
 
           {/* Outages */}
-          <Card className="rounded-lg">
-            <CardHeader className="py-2 px-3">
-              <CardTitle className="text-xs flex items-center gap-1.5">
-                <AlertTriangle className="h-3.5 w-3.5 text-amber-400" /> Outages
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="px-3 pb-3 pt-0">
-              {market.outages.length === 0 ? (
-                <div className="text-[11px] text-zinc-500">No thermal outages detected</div>
-              ) : (
-                <div className="flex flex-wrap gap-1.5">
-                  {market.outages.map((o) => (
-                    <div
-                      key={o.duid}
-                      className={cn(
-                        "inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1",
-                        o.type === "full"
-                          ? "border-rose-500/20 bg-rose-500/10"
-                          : "border-amber-500/20 bg-amber-500/10",
+          <div className="rounded-lg border bg-card p-2.5 space-y-1.5">
+            <div className="text-xs font-medium flex items-center gap-1.5 text-zinc-300">
+              <AlertTriangle className="h-3.5 w-3.5 text-amber-400" /> Outages
+            </div>
+            {market.outages.length === 0 ? (
+              <div className="text-[11px] text-zinc-500">No thermal outages detected</div>
+            ) : (
+              <div className="flex flex-wrap gap-1.5">
+                {market.outages.map((o) => (
+                  <div
+                    key={o.duid}
+                    className={cn(
+                      "inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1",
+                      o.type === "full"
+                        ? "border-rose-500/20 bg-rose-500/10"
+                        : "border-amber-500/20 bg-amber-500/10",
+                    )}
+                  >
+                    <span className={cn(
+                      "text-[11px] font-bold font-mono",
+                      o.type === "full" ? "text-rose-400" : "text-amber-400",
+                    )}>{o.duid}</span>
+                    <span className="text-[10px] text-zinc-400">
+                      {o.type === "full" ? "out" : `${o.availableMW}/${o.maxCapacity}MW`}
+                      {o.expectedReturn && (
+                        <span className="text-zinc-500 ml-0.5">
+                          till {new Date(o.expectedReturn).toLocaleDateString("en-AU", { timeZone: "Australia/Brisbane", day: "numeric", month: "short" })}
+                        </span>
                       )}
-                    >
-                      <span className={cn(
-                        "text-[11px] font-bold font-mono",
-                        o.type === "full" ? "text-rose-400" : "text-amber-400",
-                      )}>{o.duid}</span>
-                      <span className="text-[10px] text-zinc-400">
-                        {o.type === "full" ? "out" : `${o.availableMW}/${o.maxCapacity}MW`}
-                        {o.expectedReturn && (
-                          <span className="text-zinc-500 ml-0.5">
-                            till {new Date(o.expectedReturn).toLocaleDateString("en-AU", { timeZone: "Australia/Brisbane", day: "numeric", month: "short" })}
-                          </span>
-                        )}
-                        <span className="text-zinc-600 ml-0.5">{o.fuel}</span>
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </CardContent>
-          </Card>
+                      <span className="text-zinc-600 ml-0.5">{o.fuel}</span>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
 
           {/* Upcoming outages — within 30 days */}
           {(() => {
@@ -2453,33 +2446,29 @@ function MarketAnalysisTab() {
               return startMs - now <= tenDays;
             });
             return upcoming.length > 0 ? (
-              <Card className="rounded-lg">
-                <CardHeader className="py-2 px-3">
-                  <CardTitle className="text-xs flex items-center gap-1.5">
-                    <Clock className="h-3.5 w-3.5 text-zinc-400" /> Upcoming Outages
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="px-3 pb-3 pt-0">
-                  <div className="flex flex-wrap gap-1.5">
-                    {upcoming.map((o) => {
-                      const startD = new Date(o.outageStart.replace(/\//g, "-"));
-                      const startStr = startD.toLocaleDateString("en-AU", { timeZone: "Australia/Brisbane", day: "numeric", month: "short" });
-                      const endStr = o.expectedReturn
-                        ? new Date(o.expectedReturn.replace(/\//g, "-")).toLocaleDateString("en-AU", { timeZone: "Australia/Brisbane", day: "numeric", month: "short" })
-                        : null;
-                      return (
-                        <div key={o.duid} className="inline-flex items-center gap-1.5 rounded-md border border-zinc-500/20 bg-zinc-500/10 px-2.5 py-1">
-                          <span className="text-[11px] font-bold font-mono text-zinc-300">{o.duid}</span>
-                          <span className="text-[10px] text-zinc-400">
-                            {startStr}{endStr ? ` → ${endStr}` : ""}
-                            <span className="text-zinc-600 ml-0.5">{o.fuel} · {o.region.replace("1", "")}</span>
-                          </span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </CardContent>
-              </Card>
+              <div className="rounded-lg border bg-card p-2.5 space-y-1.5">
+                <div className="text-xs font-medium flex items-center gap-1.5 text-zinc-300">
+                  <Clock className="h-3.5 w-3.5 text-zinc-400" /> Upcoming Outages
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {upcoming.map((o) => {
+                    const startD = new Date(o.outageStart.replace(/\//g, "-"));
+                    const startStr = startD.toLocaleDateString("en-AU", { timeZone: "Australia/Brisbane", day: "numeric", month: "short" });
+                    const endStr = o.expectedReturn
+                      ? new Date(o.expectedReturn.replace(/\//g, "-")).toLocaleDateString("en-AU", { timeZone: "Australia/Brisbane", day: "numeric", month: "short" })
+                      : null;
+                    return (
+                      <div key={o.duid} className="inline-flex items-center gap-1.5 rounded-md border border-zinc-500/20 bg-zinc-500/10 px-2.5 py-1">
+                        <span className="text-[11px] font-bold font-mono text-zinc-300">{o.duid}</span>
+                        <span className="text-[10px] text-zinc-400">
+                          {startStr}{endStr ? ` → ${endStr}` : ""}
+                          <span className="text-zinc-600 ml-0.5">{o.fuel} · {o.region.replace("1", "")}</span>
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
             ) : null;
           })()}
         </div>
