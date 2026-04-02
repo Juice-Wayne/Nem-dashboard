@@ -2379,7 +2379,7 @@ function MarketAnalysisTab() {
 
           {/* Interconnectors */}
           {/* Interconnectors */}
-          <div className="rounded-lg border bg-card p-2.5 space-y-1">
+          <div className="rounded-lg border bg-card p-2.5 space-y-5">
             <div className="text-xs font-medium flex items-center gap-1.5 text-zinc-300">
               <ArrowLeftRight className="h-3.5 w-3.5 text-zinc-400" /> Interconnectors
             </div>
@@ -2400,7 +2400,7 @@ function MarketAnalysisTab() {
           </div>
 
           {/* Outages */}
-          <div className="rounded-lg border bg-card p-2.5 space-y-1">
+          <div className="rounded-lg border bg-card p-2.5 space-y-5">
             <div className="text-xs font-medium flex items-center gap-1.5 text-zinc-300">
               <AlertTriangle className="h-3.5 w-3.5 text-amber-400" /> Outages
             </div>
@@ -2446,7 +2446,7 @@ function MarketAnalysisTab() {
               return startMs - now <= tenDays;
             });
             return upcoming.length > 0 ? (
-              <div className="rounded-lg border bg-card p-2.5 space-y-1">
+              <div className="rounded-lg border bg-card p-2.5 space-y-5">
                 <div className="text-xs font-medium flex items-center gap-1.5 text-zinc-300">
                   <Clock className="h-3.5 w-3.5 text-zinc-400" /> Upcoming Outages
                 </div>
