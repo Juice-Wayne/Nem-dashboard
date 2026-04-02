@@ -2137,8 +2137,7 @@ function buildMarketText(market: MarketSummaryData, manual: MarketManualData): s
       parts.push(`max temp ${apiTemp}°C`);
     }
     if (r.windMW > 0) parts.push(`wind ~${r.windMW.toLocaleString()}MW`);
-    const solarTotal = r.solarMW + r.rooftopPvMW;
-    if (solarTotal > 0) parts.push(`solar peaking ~${solarTotal.toLocaleString()}MW`);
+    if (r.solarMW > 0) parts.push(`solar peaking ~${r.solarMW.toLocaleString()}MW`);
     parts.push(`demand ${r.peakDemand.toLocaleString()}MW`);
     if (manual.notes[r.region]) parts.push(manual.notes[r.region]);
     lines.push(`${r.region}: ${parts.join(", ")}`);
@@ -2175,10 +2174,16 @@ function buildMarketText(market: MarketSummaryData, manual: MarketManualData): s
     }
   }
 
-  // Upcoming outages (exclude SA and TAS)
-  const filteredUpcoming = (market.upcomingOutages ?? []).filter((o) => !o.region.startsWith("SA") && !o.region.startsWith("TAS"));
+  // Upcoming outages (exclude SA and TAS, within 30 days)
+  const tenDaysMs = 10 * 24 * 60 * 60 * 1000;
+  const nowMs = Date.now();
+  const filteredUpcoming = (market.upcomingOutages ?? []).filter((o) => {
+    if (o.region.startsWith("SA") || o.region.startsWith("TAS")) return false;
+    const startMs = new Date(o.outageStart.replace(/\//g, "-")).getTime();
+    return startMs - nowMs <= tenDaysMs;
+  });
   if (filteredUpcoming.length > 0) {
-    lines.push("", "Expected");
+    lines.push("", "Upcoming Outages");
     const byRegionUp = new Map<string, typeof filteredUpcoming>();
     for (const o of filteredUpcoming) {
       const key = o.region.replace("1", "");
@@ -2345,11 +2350,11 @@ function MarketAnalysisTab() {
                     </span>
                   </div>
                 )}
-                {(r.solarMW + r.rooftopPvMW) > 0 && (
+                {r.solarMW > 0 && (
                   <div className="flex items-center gap-1.5">
                     <Sun className="h-3 w-3 text-yellow-400 shrink-0" />
                     <span className="text-[11px] text-zinc-300 font-mono tabular-nums">
-                      {(r.solarMW + r.rooftopPvMW).toLocaleString()}
+                      {r.solarMW.toLocaleString()}
                       <span className="text-zinc-500 ml-0.5 font-sans">MW solar</span>
                     </span>
                   </div>
@@ -2430,6 +2435,7 @@ function MarketAnalysisTab() {
                             till {new Date(o.expectedReturn).toLocaleDateString("en-AU", { timeZone: "Australia/Brisbane", day: "numeric", month: "short" })}
                           </span>
                         )}
+                        <span className="text-zinc-600 ml-0.5">{o.fuel}</span>
                       </span>
                     </div>
                   ))}
@@ -2438,36 +2444,44 @@ function MarketAnalysisTab() {
             </CardContent>
           </Card>
 
-          {/* Upcoming outages */}
-          {market.upcomingOutages.length > 0 && (
-            <Card className="rounded-lg">
-              <CardHeader className="py-2 px-3">
-                <CardTitle className="text-xs flex items-center gap-1.5">
-                  <Clock className="h-3.5 w-3.5 text-zinc-400" /> Expected
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="px-3 pb-3 pt-0">
-                <div className="flex flex-wrap gap-1.5">
-                  {market.upcomingOutages.map((o) => {
-                    const startD = new Date(o.outageStart.replace(/\//g, "-"));
-                    const startStr = startD.toLocaleDateString("en-AU", { timeZone: "Australia/Brisbane", day: "numeric", month: "short" });
-                    const endStr = o.expectedReturn
-                      ? new Date(o.expectedReturn.replace(/\//g, "-")).toLocaleDateString("en-AU", { timeZone: "Australia/Brisbane", day: "numeric", month: "short" })
-                      : null;
-                    return (
-                      <div key={o.duid} className="inline-flex items-center gap-1.5 rounded-md border border-zinc-500/20 bg-zinc-500/10 px-2.5 py-1">
-                        <span className="text-[11px] font-bold font-mono text-zinc-300">{o.duid}</span>
-                        <span className="text-[10px] text-zinc-400">
-                          {startStr}{endStr ? ` → ${endStr}` : ""}
-                          <span className="text-zinc-600 ml-0.5">{o.region.replace("1", "")}</span>
-                        </span>
-                      </div>
-                    );
-                  })}
-                </div>
-              </CardContent>
-            </Card>
-          )}
+          {/* Upcoming outages — within 30 days */}
+          {(() => {
+            const tenDays = 10 * 24 * 60 * 60 * 1000;
+            const now = Date.now();
+            const upcoming = (market.upcomingOutages ?? []).filter((o) => {
+              const startMs = new Date(o.outageStart.replace(/\//g, "-")).getTime();
+              return startMs - now <= tenDays;
+            });
+            return upcoming.length > 0 ? (
+              <Card className="rounded-lg">
+                <CardHeader className="py-2 px-3">
+                  <CardTitle className="text-xs flex items-center gap-1.5">
+                    <Clock className="h-3.5 w-3.5 text-zinc-400" /> Upcoming Outages
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="px-3 pb-3 pt-0">
+                  <div className="flex flex-wrap gap-1.5">
+                    {upcoming.map((o) => {
+                      const startD = new Date(o.outageStart.replace(/\//g, "-"));
+                      const startStr = startD.toLocaleDateString("en-AU", { timeZone: "Australia/Brisbane", day: "numeric", month: "short" });
+                      const endStr = o.expectedReturn
+                        ? new Date(o.expectedReturn.replace(/\//g, "-")).toLocaleDateString("en-AU", { timeZone: "Australia/Brisbane", day: "numeric", month: "short" })
+                        : null;
+                      return (
+                        <div key={o.duid} className="inline-flex items-center gap-1.5 rounded-md border border-zinc-500/20 bg-zinc-500/10 px-2.5 py-1">
+                          <span className="text-[11px] font-bold font-mono text-zinc-300">{o.duid}</span>
+                          <span className="text-[10px] text-zinc-400">
+                            {startStr}{endStr ? ` → ${endStr}` : ""}
+                            <span className="text-zinc-600 ml-0.5">{o.fuel} · {o.region.replace("1", "")}</span>
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </CardContent>
+              </Card>
+            ) : null;
+          })()}
         </div>
 
         {/* Right column: copyable text summary — stretches to match left */}
