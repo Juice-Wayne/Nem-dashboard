@@ -388,7 +388,7 @@ export default function HomePage() {
 
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 mt-1">
       {/* Tabs */}
       <Tabs value={activeTab} onValueChange={handleTabChange}>
         <div className="relative flex items-center justify-between flex-wrap gap-3">
@@ -584,7 +584,7 @@ export default function HomePage() {
         </TabsContent>
 
         {/* === MARKET ANALYSIS TAB === */}
-        <TabsContent value="market">
+        <TabsContent value="market" className="mt-4">
           <MarketAnalysisTab />
         </TabsContent>
       </Tabs>
@@ -1174,7 +1174,7 @@ function ActualsTables({
   }, [data]);
 
   return (
-    <div className="space-y-6 mt-4">
+    <div className="space-y-6 mt-1">
       {/* Prices: Forecast vs Actual */}
       <Card className="rounded-xl">
         <CardHeader>
@@ -2125,7 +2125,7 @@ function buildMarketText(market: MarketSummaryData, manual: MarketManualData): s
   const dateStr = new Date().toLocaleDateString("en-AU", {
     timeZone: "Australia/Brisbane", weekday: "short", day: "numeric", month: "short", year: "numeric",
   });
-  const lines: string[] = [`Market Analysis — ${dateStr}`, ""];
+  const lines: string[] = [`**Market Analysis — ${dateStr}**`, ""];
 
   for (const r of market.regions) {
     const parts: string[] = [];
@@ -2142,11 +2142,11 @@ function buildMarketText(market: MarketSummaryData, manual: MarketManualData): s
     if (r.solarMW > 0 || r.solarNowMW > 0) parts.push(`solar ${r.solarNowMW.toLocaleString()}/${r.solarMW.toLocaleString()}MW`);
     parts.push(`demand ${r.peakDemand.toLocaleString()}MW`);
     if (manual.notes[r.region]) parts.push(manual.notes[r.region]);
-    lines.push(`${r.region}: ${parts.join(", ")}`);
+    lines.push(`**${r.region}**: ${parts.join(", ")}`);
   }
 
   if ((market.interconnectors ?? []).length > 0) {
-    lines.push("", "Interconnectors");
+    lines.push("", "**Interconnectors**");
     for (const ic of market.interconnectors) {
       lines.push(`${ic.name} binding ${ic.direction} ${ic.bindingDescription || ""}`.trim());
     }
@@ -2154,7 +2154,7 @@ function buildMarketText(market: MarketSummaryData, manual: MarketManualData): s
 
   const filteredOutages = (market.outages ?? []).filter((o) => !o.region.startsWith("SA") && !o.region.startsWith("TAS"));
   if (filteredOutages.length > 0) {
-    lines.push("", "Outages");
+    lines.push("", "**Outages**");
     const byRegion = new Map<string, typeof filteredOutages>();
     for (const o of filteredOutages) {
       const key = o.region.replace("1", "");
@@ -2162,7 +2162,7 @@ function buildMarketText(market: MarketSummaryData, manual: MarketManualData): s
       byRegion.get(key)!.push(o);
     }
     for (const [region, outages] of byRegion) {
-      lines.push(`--- ${region} ---`);
+      lines.push(`**${region}**`);
       for (const o of outages) {
         const label = o.type === "full" ? "outage" : `partial outage (${o.availableMW}/${o.maxCapacity}MW)`;
         if (o.expectedReturn) {
@@ -2176,7 +2176,7 @@ function buildMarketText(market: MarketSummaryData, manual: MarketManualData): s
     }
   }
 
-  // Upcoming outages (exclude SA and TAS, within 30 days)
+  // Upcoming outages (exclude SA and TAS, within 10 days)
   const tenDaysMs = 10 * 24 * 60 * 60 * 1000;
   const nowMs = Date.now();
   const filteredUpcoming = (market.upcomingOutages ?? []).filter((o) => {
@@ -2185,7 +2185,7 @@ function buildMarketText(market: MarketSummaryData, manual: MarketManualData): s
     return startMs - nowMs <= tenDaysMs;
   });
   if (filteredUpcoming.length > 0) {
-    lines.push("", "Upcoming Outages");
+    lines.push("", "**Upcoming Outages**");
     const byRegionUp = new Map<string, typeof filteredUpcoming>();
     for (const o of filteredUpcoming) {
       const key = o.region.replace("1", "");
@@ -2193,7 +2193,7 @@ function buildMarketText(market: MarketSummaryData, manual: MarketManualData): s
       byRegionUp.get(key)!.push(o);
     }
     for (const [region, upcoming] of byRegionUp) {
-      lines.push(`--- ${region} ---`);
+      lines.push(`**${region}**`);
       for (const o of upcoming) {
         const startD = new Date(o.outageStart.replace(/\//g, "-"));
         const startStr = startD.toLocaleDateString("en-AU", { timeZone: "Australia/Brisbane", day: "numeric", month: "short" });
@@ -2250,7 +2250,17 @@ function MarketAnalysisTab() {
 
   const handleCopy = async () => {
     if (!market) return;
-    await navigator.clipboard.writeText(buildMarketText(market, manual));
+    const text = buildMarketText(market, manual);
+    // Convert **bold** markdown to <b> HTML for Teams/rich text paste
+    const html = text
+      .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
+      .replace(/\n/g, "<br>");
+    const plainText = text.replace(/\*\*/g, "");
+    const blob = new Blob([html], { type: "text/html" });
+    const plainBlob = new Blob([plainText], { type: "text/plain" });
+    await navigator.clipboard.write([
+      new ClipboardItem({ "text/html": blob, "text/plain": plainBlob }),
+    ]);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -2312,16 +2322,6 @@ function MarketAnalysisTab() {
 
   return (
     <div className="space-y-3">
-      {/* Header + copy button */}
-      <div className="flex items-center justify-between">
-        <h2 className="text-sm font-medium text-zinc-400">
-          Market Analysis — {new Date().toLocaleDateString("en-AU", { timeZone: "Australia/Brisbane", weekday: "short", day: "numeric", month: "short", year: "numeric" })}
-        </h2>
-        <Button variant="ghost" size="icon-sm" onClick={handleCopy}>
-          {copied ? <Check className="h-4 w-4 text-emerald-400" /> : <Copy className="h-4 w-4" />}
-        </Button>
-      </div>
-
       {/* Two-column layout: data left, copyable text right */}
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_1fr] gap-3 lg:items-stretch">
         {/* Left column: regions, interconnectors, outages, upcoming */}
@@ -2480,8 +2480,24 @@ function MarketAnalysisTab() {
         </div>
 
         {/* Right column: copyable text summary — stretches to match left */}
-        <div className="rounded-lg border border-input bg-white/[0.03] p-3 text-[11px] font-mono text-zinc-300 whitespace-pre-wrap break-words leading-relaxed overflow-auto min-h-[300px]">
-          {summaryText}
+        <div className="relative rounded-lg border border-input bg-white/[0.03] p-3 pr-10 text-[11px] font-mono text-zinc-300 whitespace-pre-wrap break-words leading-relaxed overflow-auto min-h-[300px]">
+          <Button variant="ghost" size="icon-sm" className="absolute top-2 right-2" onClick={handleCopy}>
+            {copied ? <Check className="h-4 w-4 text-emerald-400" /> : <Copy className="h-4 w-4" />}
+          </Button>
+          {summaryText.split("\n").map((line, i) => {
+            // Render **bold** as <strong> for on-screen display
+            const parts = line.split(/(\*\*.*?\*\*)/g);
+            return (
+              <span key={i}>
+                {parts.map((part, j) =>
+                  part.startsWith("**") && part.endsWith("**")
+                    ? <strong key={j} className="text-zinc-100 font-semibold">{part.slice(2, -2)}</strong>
+                    : part
+                )}
+                {"\n"}
+              </span>
+            );
+          })}
         </div>
       </div>
     </div>
