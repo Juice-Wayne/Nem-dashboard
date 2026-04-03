@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useMemo, useCallback } from "react";
-import { Copy, Check, RefreshCw, Sun, Moon, Pencil, Save, Plus, X, Thermometer, Wind, Zap, ArrowLeftRight, AlertTriangle, Clock } from "lucide-react";
+import { Copy, Check, RefreshCw, Sun, Moon, Pencil, Save, Plus, X, Thermometer, Wind, Zap, ArrowLeftRight, AlertTriangle, Clock, Filter } from "lucide-react";
 import useSWR from "swr";
 import { cn } from "@/lib/utils";
 import { useAutoRefresh } from "@/lib/hooks/use-auto-refresh";
@@ -2121,94 +2121,337 @@ function saveManualData(data: MarketManualData) {
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
-function buildMarketText(market: MarketSummaryData, manual: MarketManualData): string {
+// Map interconnector direction ("north"/"south") to destination state
+const IC_DIRECTION_TO_STATE: Record<string, Record<string, string>> = {
+  "QNI":        { north: "to QLD", south: "to NSW" },
+  "Terranora":  { north: "to QLD", south: "to NSW" },
+  "VNI":        { north: "to NSW", south: "to VIC" },
+  "Heywood":    { north: "to VIC", south: "to SA" },
+  "Murraylink": { north: "to VIC", south: "to SA" },
+};
+
+function icDirectionLabel(name: string, direction: string): string {
+  return IC_DIRECTION_TO_STATE[name]?.[direction] ?? direction;
+}
+
+type MarketTextStyle = "compact" | "dot-point" | "narrative" | "table";
+
+function buildMarketText(market: MarketSummaryData, manual: MarketManualData, outageFuels?: Set<string>, icFilter?: Set<string>, style: MarketTextStyle = "compact"): string {
   const dateStr = new Date().toLocaleDateString("en-AU", {
     timeZone: "Australia/Brisbane", weekday: "short", day: "numeric", month: "short", year: "numeric",
   });
-  const lines: string[] = [`**Market Analysis — ${dateStr}**`, ""];
 
-  for (const r of market.regions) {
-    const parts: string[] = [];
-    // Manual temp takes priority, then API temp from Open-Meteo
+  // --- Shared data prep ---
+  const regionData = market.regions.map((r) => {
     const regionKey = r.region.replace("1", "");
     const manualTemp = manual.temps[r.region] || manual.temps[regionKey];
     const apiTemp = market.temps?.[regionKey];
-    if (manualTemp) {
-      parts.push(`max temp ${manualTemp}`);
-    } else if (apiTemp != null) {
-      parts.push(`max temp ${apiTemp}°C`);
-    }
-    if (r.windMW > 0 || r.windNowMW > 0) parts.push(`wind ${r.windNowMW.toLocaleString()}/${r.windMW.toLocaleString()}MW`);
-    if (r.solarMW > 0 || r.solarNowMW > 0) parts.push(`solar ${r.solarNowMW.toLocaleString()}/${r.solarMW.toLocaleString()}MW`);
-    parts.push(`demand ${r.peakDemand.toLocaleString()}MW`);
-    if (manual.notes[r.region]) parts.push(manual.notes[r.region]);
-    lines.push(`**${r.region}**: ${parts.join(", ")}`);
-  }
+    const temp = manualTemp || (apiTemp != null ? `${apiTemp}°C` : null);
+    const notes = manual.notes[r.region] || null;
+    return { ...r, regionKey, temp, notes };
+  });
 
-  if ((market.interconnectors ?? []).length > 0) {
-    lines.push("", "**Interconnectors**");
-    for (const ic of market.interconnectors) {
-      lines.push(`${ic.name} binding ${ic.direction} ${ic.bindingDescription || ""}`.trim());
-    }
-  }
+  const filteredICs = (market.interconnectors ?? []).filter((ic) => !icFilter || icFilter.has(ic.name));
 
-  const filteredOutages = (market.outages ?? []).filter((o) => !o.region.startsWith("SA") && !o.region.startsWith("TAS"));
-  if (filteredOutages.length > 0) {
-    lines.push("", "**Outages**");
-    const byRegion = new Map<string, typeof filteredOutages>();
-    for (const o of filteredOutages) {
-      const key = o.region.replace("1", "");
-      if (!byRegion.has(key)) byRegion.set(key, []);
-      byRegion.get(key)!.push(o);
-    }
-    for (const [region, outages] of byRegion) {
-      lines.push(`**${region}**`);
-      for (const o of outages) {
-        const label = o.type === "full" ? "outage" : `partial outage (${o.availableMW}/${o.maxCapacity}MW)`;
-        if (o.expectedReturn) {
-          const d = new Date(o.expectedReturn);
-          const returnStr = d.toLocaleDateString("en-AU", { timeZone: "Australia/Brisbane", day: "numeric", month: "short" });
-          lines.push(`${o.duid}: ${label} till ${returnStr}`);
-        } else {
-          lines.push(`${o.duid}: ${label}`);
-        }
-      }
-    }
-  }
+  const filteredOutages = (market.outages ?? []).filter((o) => {
+    if (o.region.startsWith("SA") || o.region.startsWith("TAS")) return false;
+    if (outageFuels && !outageFuels.has(o.fuel)) return false;
+    return true;
+  });
 
-  // Upcoming outages (exclude SA and TAS, within 10 days)
   const tenDaysMs = 10 * 24 * 60 * 60 * 1000;
   const nowMs = Date.now();
   const filteredUpcoming = (market.upcomingOutages ?? []).filter((o) => {
     if (o.region.startsWith("SA") || o.region.startsWith("TAS")) return false;
+    if (outageFuels && !outageFuels.has(o.fuel)) return false;
+    const startMs = new Date(o.outageStart.replace(/\//g, "-")).getTime();
+    return startMs - nowMs <= tenDaysMs;
+  });
+
+  const fmtDate = (s: string) => new Date(s.replace(/\//g, "-")).toLocaleDateString("en-AU", { timeZone: "Australia/Brisbane", day: "numeric", month: "short" });
+
+  function groupByRegion<T extends { region: string }>(items: T[]): Map<string, T[]> {
+    const m = new Map<string, T[]>();
+    for (const o of items) {
+      const key = o.region.replace("1", "");
+      if (!m.has(key)) m.set(key, []);
+      m.get(key)!.push(o);
+    }
+    return m;
+  }
+
+  function outageLabel(o: MarketOutageUI) {
+    return o.type === "full" ? "outage" : `partial outage (${o.availableMW}/${o.maxCapacity}MW)`;
+  }
+
+  // --- Style 1: Compact (default) ---
+  if (style === "compact") {
+    const lines: string[] = [`**Market Analysis — ${dateStr}**`, ""];
+    for (const r of regionData) {
+      const parts: string[] = [];
+      if (r.temp) parts.push(`max temp ${r.temp}`);
+      if (r.windMW > 0 || r.windNowMW > 0) parts.push(`wind ${r.windNowMW.toLocaleString()}MW now, ${r.windMW.toLocaleString()}MW peak`);
+      if (r.solarMW > 0 || r.solarNowMW > 0) parts.push(`solar ${r.solarNowMW.toLocaleString()}MW now, ${r.solarMW.toLocaleString()}MW peak`);
+      parts.push(`demand ${r.peakDemand.toLocaleString()}MW`);
+      if (r.notes) parts.push(r.notes);
+      lines.push(`**${r.regionKey}**: ${parts.join(", ")}`);
+    }
+    if (filteredICs.length > 0) {
+      lines.push("", "**Interconnectors**");
+      for (const ic of filteredICs) lines.push(`${ic.name} binding ${icDirectionLabel(ic.name, ic.direction)} ${ic.bindingDescription || ""}`.trim());
+    }
+    if (filteredOutages.length > 0) {
+      lines.push("", "**Outages**");
+      for (const [region, outages] of groupByRegion(filteredOutages)) {
+        lines.push(`**${region}**`);
+        for (const o of outages) {
+          const ret = o.expectedReturn ? ` till ${fmtDate(o.expectedReturn)}` : "";
+          lines.push(`${o.duid}: ${outageLabel(o)}${ret}`);
+        }
+      }
+    }
+    if (filteredUpcoming.length > 0) {
+      lines.push("", "**Upcoming Outages**");
+      for (const [region, upcoming] of groupByRegion(filteredUpcoming)) {
+        lines.push(`**${region}**`);
+        for (const o of upcoming) {
+          const ret = o.expectedReturn ? ` to ${fmtDate(o.expectedReturn)}` : "";
+          lines.push(`${o.duid}: out from ${fmtDate(o.outageStart)}${ret}`);
+        }
+      }
+    }
+    return lines.join("\n");
+  }
+
+  // --- Style 2: Dot point ---
+  if (style === "dot-point") {
+    const lines: string[] = [`**Market Analysis — ${dateStr}**`];
+    for (const r of regionData) {
+      lines.push("", `**${r.regionKey}**`);
+      if (r.temp) lines.push(`  - Max temp: ${r.temp}`);
+      if (r.windMW > 0 || r.windNowMW > 0) lines.push(`  - Wind: ${r.windNowMW.toLocaleString()}MW now, ${r.windMW.toLocaleString()}MW peak`);
+      if (r.solarMW > 0 || r.solarNowMW > 0) lines.push(`  - Solar: ${r.solarNowMW.toLocaleString()}MW now, ${r.solarMW.toLocaleString()}MW peak`);
+      lines.push(`  - Demand: ${r.peakDemand.toLocaleString()}MW peak, ${r.currentDemand.toLocaleString()}MW now`);
+      if (r.notes) lines.push(`  - ${r.notes}`);
+    }
+    if (filteredICs.length > 0) {
+      lines.push("", "**Interconnectors**");
+      for (const ic of filteredICs) lines.push(`  - ${ic.name} binding ${icDirectionLabel(ic.name, ic.direction)} ${ic.bindingDescription || ""}`.trim());
+    }
+    if (filteredOutages.length > 0) {
+      lines.push("", "**Outages**");
+      for (const [region, outages] of groupByRegion(filteredOutages)) {
+        lines.push(`  **${region}**`);
+        for (const o of outages) {
+          const ret = o.expectedReturn ? ` till ${fmtDate(o.expectedReturn)}` : "";
+          lines.push(`    - ${o.duid}: ${outageLabel(o)}${ret}`);
+        }
+      }
+    }
+    if (filteredUpcoming.length > 0) {
+      lines.push("", "**Upcoming Outages**");
+      for (const [region, upcoming] of groupByRegion(filteredUpcoming)) {
+        lines.push(`  **${region}**`);
+        for (const o of upcoming) {
+          const ret = o.expectedReturn ? ` to ${fmtDate(o.expectedReturn)}` : "";
+          lines.push(`    - ${o.duid}: out from ${fmtDate(o.outageStart)}${ret}`);
+        }
+      }
+    }
+    return lines.join("\n");
+  }
+
+  // --- Style 3: Narrative ---
+  if (style === "narrative") {
+    const lines: string[] = [`**Market Analysis — ${dateStr}**`, ""];
+    const regionNames: Record<string, string> = { NSW: "New South Wales", QLD: "Queensland", VIC: "Victoria", SA: "South Australia" };
+    for (const r of regionData) {
+      const name = regionNames[r.regionKey] ?? r.regionKey;
+      const parts: string[] = [];
+      if (r.temp) parts.push(`a forecast maximum of ${r.temp}`);
+      parts.push(`demand is expected to peak at ${r.peakDemand.toLocaleString()}MW and is currently sitting at ${r.currentDemand.toLocaleString()}MW`);
+      if (r.windMW > 0 || r.windNowMW > 0) parts.push(`wind generation is currently ${r.windNowMW.toLocaleString()}MW with a forecast peak of ${r.windMW.toLocaleString()}MW`);
+      if (r.solarMW > 0 || r.solarNowMW > 0) parts.push(`solar is at ${r.solarNowMW.toLocaleString()}MW now with a peak forecast of ${r.solarMW.toLocaleString()}MW`);
+      if (r.notes) parts.push(r.notes);
+      lines.push(`**${name}** has ${parts.join(". ")}.`);
+      lines.push("");
+    }
+    if (filteredICs.length > 0) {
+      const icParts = filteredICs.map((ic) => `${ic.name} is binding ${icDirectionLabel(ic.name, ic.direction)} ${ic.bindingDescription || ""}`.trim());
+      lines.push(`On the interconnectors, ${icParts.join("; ")}.`);
+      lines.push("");
+    }
+    if (filteredOutages.length > 0) {
+      const outageParts: string[] = [];
+      for (const [region, outages] of groupByRegion(filteredOutages)) {
+        const units = outages.map((o) => {
+          const ret = o.expectedReturn ? ` (returning ${fmtDate(o.expectedReturn)})` : "";
+          return `${o.duid}${ret}`;
+        });
+        outageParts.push(`in ${region}: ${units.join(", ")}`);
+      }
+      lines.push(`Current outages include ${outageParts.join("; ")}.`);
+      lines.push("");
+    }
+    if (filteredUpcoming.length > 0) {
+      const upParts: string[] = [];
+      for (const [region, upcoming] of groupByRegion(filteredUpcoming)) {
+        const units = upcoming.map((o) => {
+          const ret = o.expectedReturn ? ` to ${fmtDate(o.expectedReturn)}` : "";
+          return `${o.duid} from ${fmtDate(o.outageStart)}${ret}`;
+        });
+        upParts.push(`in ${region}: ${units.join(", ")}`);
+      }
+      lines.push(`Upcoming planned outages: ${upParts.join("; ")}.`);
+    }
+    return lines.join("\n");
+  }
+
+  // --- Style 4: Table (space-aligned for monospace) ---
+  {
+    const pad = (s: string, w: number) => s + " ".repeat(Math.max(0, w - s.length));
+    const lines: string[] = [`**Market Analysis — ${dateStr}**`, ""];
+
+    // Region table
+    const cols = ["Region", "Temp", "Wind Now", "Wind Pk", "Solar Now", "Solar Pk", "Demand"];
+    const rows = regionData.map((r) => [
+      r.regionKey,
+      r.temp ?? "-",
+      (r.windNowMW > 0 || r.windMW > 0) ? `${r.windNowMW.toLocaleString()}` : "-",
+      r.windMW > 0 ? `${r.windMW.toLocaleString()}` : "-",
+      (r.solarNowMW > 0 || r.solarMW > 0) ? `${r.solarNowMW.toLocaleString()}` : "-",
+      r.solarMW > 0 ? `${r.solarMW.toLocaleString()}` : "-",
+      `${r.peakDemand.toLocaleString()}`,
+    ]);
+    const widths = cols.map((c, i) => Math.max(c.length, ...rows.map((r) => r[i].length)));
+    lines.push(cols.map((c, i) => pad(c, widths[i])).join("  "));
+    lines.push(widths.map((w) => "-".repeat(w)).join("  "));
+    for (const row of rows) lines.push(row.map((c, i) => pad(c, widths[i])).join("  "));
+
+    // IC table
+    if (filteredICs.length > 0) {
+      lines.push("", "**Interconnectors**");
+      const icCols = ["Name", "Direction", "Period"];
+      const icRows = filteredICs.map((ic) => [ic.name, icDirectionLabel(ic.name, ic.direction), ic.bindingDescription || "all day"]);
+      const icW = icCols.map((c, i) => Math.max(c.length, ...icRows.map((r) => r[i].length)));
+      lines.push(icCols.map((c, i) => pad(c, icW[i])).join("  "));
+      lines.push(icW.map((w) => "-".repeat(w)).join("  "));
+      for (const row of icRows) lines.push(row.map((c, i) => pad(c, icW[i])).join("  "));
+    }
+
+    // Outage table
+    if (filteredOutages.length > 0) {
+      lines.push("", "**Outages**");
+      const oCols = ["Unit", "Region", "Status", "Return"];
+      const oRows = filteredOutages.map((o) => [o.duid, o.region.replace("1", ""), outageLabel(o), o.expectedReturn ? fmtDate(o.expectedReturn) : "-"]);
+      const oW = oCols.map((c, i) => Math.max(c.length, ...oRows.map((r) => r[i].length)));
+      lines.push(oCols.map((c, i) => pad(c, oW[i])).join("  "));
+      lines.push(oW.map((w) => "-".repeat(w)).join("  "));
+      for (const row of oRows) lines.push(row.map((c, i) => pad(c, oW[i])).join("  "));
+    }
+
+    // Upcoming table
+    if (filteredUpcoming.length > 0) {
+      lines.push("", "**Upcoming Outages**");
+      const uCols = ["Unit", "Region", "From", "To"];
+      const uRows = filteredUpcoming.map((o) => [o.duid, o.region.replace("1", ""), fmtDate(o.outageStart), o.expectedReturn ? fmtDate(o.expectedReturn) : "-"]);
+      const uW = uCols.map((c, i) => Math.max(c.length, ...uRows.map((r) => r[i].length)));
+      lines.push(uCols.map((c, i) => pad(c, uW[i])).join("  "));
+      lines.push(uW.map((w) => "-".repeat(w)).join("  "));
+      for (const row of uRows) lines.push(row.map((c, i) => pad(c, uW[i])).join("  "));
+    }
+
+    return lines.join("\n");
+  }
+}
+
+function buildMarketTableHtml(market: MarketSummaryData, manual: MarketManualData, outageFuels?: Set<string>, icFilter?: Set<string>, dark = false): string {
+  const dateStr = new Date().toLocaleDateString("en-AU", {
+    timeZone: "Australia/Brisbane", weekday: "short", day: "numeric", month: "short", year: "numeric",
+  });
+  const border = dark ? "#333" : "#ccc";
+  const thBg = dark ? "#1a1a1a" : "#f5f5f5";
+  const thColor = dark ? "#e4e4e7" : "inherit";
+  const tdColor = dark ? "#a1a1aa" : "inherit";
+  const ts = `style="border:1px solid ${border};padding:4px 8px;text-align:left;color:${tdColor}"`;
+  const ths = `style="border:1px solid ${border};padding:4px 8px;text-align:left;font-weight:bold;background:${thBg};color:${thColor}"`;
+  const tbl = `style="border-collapse:collapse;font-size:11px;font-family:ui-monospace,monospace"`;
+
+  function table(headers: string[], rows: string[][]): string {
+    const hdr = headers.map((h) => `<th ${ths}>${h}</th>`).join("");
+    const body = rows.map((r) => "<tr>" + r.map((c) => `<td ${ts}>${c}</td>`).join("") + "</tr>").join("");
+    return `<table ${tbl}><tr>${hdr}</tr>${body}</table>`;
+  }
+
+  const fmtDate = (s: string) => new Date(s.replace(/\//g, "-")).toLocaleDateString("en-AU", { timeZone: "Australia/Brisbane", day: "numeric", month: "short" });
+
+  const bStyle = dark ? ' style="color:#e4e4e7"' : '';
+  const parts: string[] = [`<b${bStyle}>Market Analysis — ${dateStr}</b><br><br>`];
+
+  // Region table
+  const regionRows = market.regions.map((r) => {
+    const regionKey = r.region.replace("1", "");
+    const manualTemp = manual.temps[r.region] || manual.temps[regionKey];
+    const apiTemp = market.temps?.[regionKey];
+    const temp = manualTemp || (apiTemp != null ? `${apiTemp}°C` : "-");
+    return [
+      `<b>${regionKey}</b>`,
+      temp,
+      (r.windNowMW > 0 || r.windMW > 0) ? r.windNowMW.toLocaleString() : "-",
+      r.windMW > 0 ? r.windMW.toLocaleString() : "-",
+      (r.solarNowMW > 0 || r.solarMW > 0) ? r.solarNowMW.toLocaleString() : "-",
+      r.solarMW > 0 ? r.solarMW.toLocaleString() : "-",
+      r.peakDemand.toLocaleString(),
+    ];
+  });
+  parts.push(table(["Region", "Temp", "Wind Now", "Wind Peak", "Solar Now", "Solar Peak", "Demand MW"], regionRows));
+
+  // IC table
+  const filteredICs = (market.interconnectors ?? []).filter((ic) => !icFilter || icFilter.has(ic.name));
+  if (filteredICs.length > 0) {
+    parts.push(`<br><b${bStyle}>Interconnectors</b><br>`);
+    const icRows = filteredICs.map((ic) => [ic.name, icDirectionLabel(ic.name, ic.direction), ic.bindingDescription || "all day"]);
+    parts.push(table(["Name", "Direction", "Period"], icRows));
+  }
+
+  // Outage table
+  const filteredOutages = (market.outages ?? []).filter((o) => {
+    if (o.region.startsWith("SA") || o.region.startsWith("TAS")) return false;
+    if (outageFuels && !outageFuels.has(o.fuel)) return false;
+    return true;
+  });
+  if (filteredOutages.length > 0) {
+    parts.push(`<br><b${bStyle}>Outages</b><br>`);
+    const oRows = filteredOutages.map((o) => [
+      o.duid,
+      o.region.replace("1", ""),
+      o.type === "full" ? "outage" : `partial (${o.availableMW}/${o.maxCapacity}MW)`,
+      o.expectedReturn ? fmtDate(o.expectedReturn) : "-",
+    ]);
+    parts.push(table(["Unit", "Region", "Status", "Return"], oRows));
+  }
+
+  // Upcoming table
+  const tenDaysMs = 10 * 24 * 60 * 60 * 1000;
+  const nowMs = Date.now();
+  const filteredUpcoming = (market.upcomingOutages ?? []).filter((o) => {
+    if (o.region.startsWith("SA") || o.region.startsWith("TAS")) return false;
+    if (outageFuels && !outageFuels.has(o.fuel)) return false;
     const startMs = new Date(o.outageStart.replace(/\//g, "-")).getTime();
     return startMs - nowMs <= tenDaysMs;
   });
   if (filteredUpcoming.length > 0) {
-    lines.push("", "**Upcoming Outages**");
-    const byRegionUp = new Map<string, typeof filteredUpcoming>();
-    for (const o of filteredUpcoming) {
-      const key = o.region.replace("1", "");
-      if (!byRegionUp.has(key)) byRegionUp.set(key, []);
-      byRegionUp.get(key)!.push(o);
-    }
-    for (const [region, upcoming] of byRegionUp) {
-      lines.push(`**${region}**`);
-      for (const o of upcoming) {
-        const startD = new Date(o.outageStart.replace(/\//g, "-"));
-        const startStr = startD.toLocaleDateString("en-AU", { timeZone: "Australia/Brisbane", day: "numeric", month: "short" });
-        if (o.expectedReturn) {
-          const endD = new Date(o.expectedReturn.replace(/\//g, "-"));
-          const endStr = endD.toLocaleDateString("en-AU", { timeZone: "Australia/Brisbane", day: "numeric", month: "short" });
-          lines.push(`${o.duid}: out from ${startStr} to ${endStr}`);
-        } else {
-          lines.push(`${o.duid}: out from ${startStr}`);
-        }
-      }
-    }
+    parts.push(`<br><b${bStyle}>Upcoming Outages</b><br>`);
+    const uRows = filteredUpcoming.map((o) => [
+      o.duid,
+      o.region.replace("1", ""),
+      fmtDate(o.outageStart),
+      o.expectedReturn ? fmtDate(o.expectedReturn) : "-",
+    ]);
+    parts.push(table(["Unit", "Region", "From", "To"], uRows));
   }
 
-  return lines.join("\n");
+  return parts.join("");
 }
 
 function MarketAnalysisTab() {
@@ -2231,6 +2474,54 @@ function MarketAnalysisTab() {
   const [editingManual, setEditingManual] = useState(false);
   const [copied, setCopied] = useState(false);
 
+  // Filter preferences persisted in localStorage
+  const [outageFuels, setOutageFuels] = useState<Set<string>>(() => {
+    try {
+      const saved = localStorage.getItem("nem-market-outage-fuels");
+      if (saved) return new Set(JSON.parse(saved) as string[]);
+    } catch { /* ignore */ }
+    return new Set(["Coal", "Gas"]);
+  });
+  const toggleOutageFuel = (fuel: string) => {
+    setOutageFuels((prev) => {
+      const next = new Set(prev);
+      if (next.has(fuel)) next.delete(fuel);
+      else next.add(fuel);
+      localStorage.setItem("nem-market-outage-fuels", JSON.stringify([...next]));
+      return next;
+    });
+  };
+
+  const [textStyle, setTextStyle] = useState<MarketTextStyle>(() => {
+    try {
+      const saved = localStorage.getItem("nem-market-text-style");
+      if (saved && ["compact", "dot-point", "narrative", "table"].includes(saved)) return saved as MarketTextStyle;
+    } catch { /* ignore */ }
+    return "compact";
+  });
+  const changeStyle = (s: MarketTextStyle) => {
+    setTextStyle(s);
+    localStorage.setItem("nem-market-text-style", s);
+  };
+
+  const IC_ALL = ["QNI", "Terranora", "VNI", "Heywood", "Murraylink"];
+  const [icFilterSet, setIcFilterSet] = useState<Set<string>>(() => {
+    try {
+      const saved = localStorage.getItem("nem-market-ic-filter");
+      if (saved) return new Set(JSON.parse(saved) as string[]);
+    } catch { /* ignore */ }
+    return new Set(IC_ALL);
+  });
+  const toggleIC = (name: string) => {
+    setIcFilterSet((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      localStorage.setItem("nem-market-ic-filter", JSON.stringify([...next]));
+      return next;
+    });
+  };
+
   // Edit state drafts
   const [draftTemps, setDraftTemps] = useState<Record<string, string>>({});
   const [draftNotes, setDraftNotes] = useState<Record<string, string>>({});
@@ -2250,12 +2541,18 @@ function MarketAnalysisTab() {
 
   const handleCopy = async () => {
     if (!market) return;
-    const text = buildMarketText(market, manual);
-    // Convert **bold** markdown to <b> HTML for Teams/rich text paste
-    const html = text
-      .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
-      .replace(/\n/g, "<br>");
+    const text = buildMarketText(market, manual, outageFuels, icFilterSet, textStyle);
     const plainText = text.replace(/\*\*/g, "");
+
+    let html: string;
+    if (textStyle === "table") {
+      html = buildMarketTableHtml(market, manual, outageFuels, icFilterSet);
+    } else {
+      html = text
+        .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
+        .replace(/\n/g, "<br>");
+    }
+
     const blob = new Blob([html], { type: "text/html" });
     const plainBlob = new Blob([plainText], { type: "text/plain" });
     await navigator.clipboard.write([
@@ -2318,7 +2615,7 @@ function MarketAnalysisTab() {
   }
 
   // --- Display Mode ---
-  const summaryText = buildMarketText(market, manual);
+  const summaryText = buildMarketText(market, manual, outageFuels, icFilterSet, textStyle);
 
   return (
     <div className="space-y-3">
@@ -2339,6 +2636,7 @@ function MarketAnalysisTab() {
                   return tempDisplay ? (
                     <div className="flex items-center gap-1.5">
                       <Thermometer className="h-3 w-3 text-orange-400 shrink-0" />
+                      <span className="text-[11px] text-zinc-500 font-sans w-12">Temp</span>
                       <span className="text-[11px] text-zinc-300">Max {tempDisplay}</span>
                     </div>
                   ) : null;
@@ -2346,27 +2644,34 @@ function MarketAnalysisTab() {
                 {(r.windMW > 0 || r.windNowMW > 0) && (
                   <div className="flex items-center gap-1.5">
                     <Wind className="h-3 w-3 text-emerald-400 shrink-0" />
+                    <span className="text-[11px] text-zinc-500 font-sans w-12">Wind</span>
                     <span className="text-[11px] text-zinc-300 font-mono tabular-nums">
                       {r.windNowMW.toLocaleString()}
-                      <span className="text-zinc-500 font-sans"> / </span>
+                      <span className="text-zinc-500 font-sans text-[9px]"> now</span>
+                      <span className="mx-1 text-zinc-600">,</span>
                       {r.windMW.toLocaleString()}
-                      <span className="text-zinc-500 ml-0.5 font-sans">MW wind</span>
+                      <span className="text-zinc-500 font-sans text-[9px]"> peak</span>
+                      <span className="text-zinc-500 ml-0.5 font-sans">MW</span>
                     </span>
                   </div>
                 )}
                 {(r.solarMW > 0 || r.solarNowMW > 0) && (
                   <div className="flex items-center gap-1.5">
                     <Sun className="h-3 w-3 text-yellow-400 shrink-0" />
+                    <span className="text-[11px] text-zinc-500 font-sans w-12">Solar</span>
                     <span className="text-[11px] text-zinc-300 font-mono tabular-nums">
                       {r.solarNowMW.toLocaleString()}
-                      <span className="text-zinc-500 font-sans"> / </span>
+                      <span className="text-zinc-500 font-sans text-[9px]"> now</span>
+                      <span className="mx-1 text-zinc-600">,</span>
                       {r.solarMW.toLocaleString()}
-                      <span className="text-zinc-500 ml-0.5 font-sans">MW solar</span>
+                      <span className="text-zinc-500 font-sans text-[9px]"> peak</span>
+                      <span className="text-zinc-500 ml-0.5 font-sans">MW</span>
                     </span>
                   </div>
                 )}
                 <div className="flex items-center gap-1.5">
                   <Zap className="h-3 w-3 text-blue-400 shrink-0" />
+                  <span className="text-[11px] text-zinc-500 font-sans w-12">Demand</span>
                   <span className="text-[11px] text-zinc-300 font-mono tabular-nums">
                     {r.peakDemand.toLocaleString()}
                     <span className="text-zinc-500 ml-0.5 font-sans">MW peak</span>
@@ -2374,6 +2679,7 @@ function MarketAnalysisTab() {
                 </div>
                 <div className="flex items-center gap-1.5">
                   <Zap className="h-3 w-3 text-zinc-600 shrink-0" />
+                  <span className="text-[11px] text-zinc-500 font-sans w-12">Demand</span>
                   <span className="text-[11px] text-zinc-400 font-mono tabular-nums">
                     {r.currentDemand.toLocaleString()}
                     <span className="text-zinc-500 ml-0.5 font-sans">MW now</span>
@@ -2397,7 +2703,7 @@ function MarketAnalysisTab() {
                   <div key={ic.interconnectorId} className="inline-flex items-center gap-1.5 rounded-full border border-cyan-500/20 bg-cyan-500/10 px-2.5 py-1">
                     <span className="text-[11px] font-semibold text-cyan-400 font-mono">{ic.name}</span>
                     <span className="text-[10px] text-zinc-400">
-                      {ic.direction} {ic.bindingDescription || ""}
+                      {icDirectionLabel(ic.name, ic.direction)} {ic.bindingDescription || ""}
                     </span>
                   </div>
                 ))}
@@ -2479,25 +2785,85 @@ function MarketAnalysisTab() {
           })()}
         </div>
 
-        {/* Right column: copyable text summary — stretches to match left */}
+        {/* Right column: copyable text summary with filters */}
         <div className="relative rounded-lg border border-input bg-white/[0.03] p-3 pr-10 text-[11px] font-mono text-zinc-300 whitespace-pre-wrap break-words leading-relaxed overflow-auto min-h-[300px]">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 mb-2 not-prose" style={{ fontFamily: "inherit" }}>
+            <div className="flex items-center gap-1.5">
+              <Filter className="h-3 w-3 text-zinc-500 shrink-0" />
+              <span className="text-[10px] text-zinc-500 font-sans">Outages:</span>
+              {["Coal", "Gas"].map((fuel) => (
+                <button
+                  key={fuel}
+                  onClick={() => toggleOutageFuel(fuel)}
+                  className={cn(
+                    "px-2 py-0.5 rounded text-[10px] font-medium font-sans transition-colors",
+                    outageFuels.has(fuel)
+                      ? "bg-zinc-700 text-zinc-200"
+                      : "bg-transparent text-zinc-600 border border-zinc-700/50",
+                  )}
+                >
+                  {fuel}
+                </button>
+              ))}
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] text-zinc-500 font-sans">ICs:</span>
+              {IC_ALL.map((name) => (
+                <button
+                  key={name}
+                  onClick={() => toggleIC(name)}
+                  className={cn(
+                    "px-2 py-0.5 rounded text-[10px] font-medium font-sans transition-colors",
+                    icFilterSet.has(name)
+                      ? "bg-zinc-700 text-zinc-200"
+                      : "bg-transparent text-zinc-600 border border-zinc-700/50",
+                  )}
+                >
+                  {name}
+                </button>
+              ))}
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] text-zinc-500 font-sans">Style:</span>
+              {([["compact", "Compact"], ["dot-point", "Dot Point"], ["narrative", "Narrative"], ["table", "Table"]] as const).map(([key, label]) => (
+                <button
+                  key={key}
+                  onClick={() => changeStyle(key)}
+                  className={cn(
+                    "px-2 py-0.5 rounded text-[10px] font-medium font-sans transition-colors",
+                    textStyle === key
+                      ? "bg-zinc-700 text-zinc-200"
+                      : "bg-transparent text-zinc-600 border border-zinc-700/50",
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
           <Button variant="ghost" size="icon-sm" className="absolute top-2 right-2" onClick={handleCopy}>
             {copied ? <Check className="h-4 w-4 text-emerald-400" /> : <Copy className="h-4 w-4" />}
           </Button>
-          {summaryText.split("\n").map((line, i) => {
-            // Render **bold** as <strong> for on-screen display
-            const parts = line.split(/(\*\*.*?\*\*)/g);
-            return (
-              <span key={i}>
-                {parts.map((part, j) =>
-                  part.startsWith("**") && part.endsWith("**")
-                    ? <strong key={j} className="text-zinc-100 font-semibold">{part.slice(2, -2)}</strong>
-                    : part
-                )}
-                {"\n"}
-              </span>
-            );
-          })}
+          {textStyle === "table" ? (
+            <div
+              className="market-table-preview"
+              dangerouslySetInnerHTML={{ __html: buildMarketTableHtml(market, manual, outageFuels, icFilterSet, true) }}
+            />
+          ) : (
+            summaryText.split("\n").map((line, i) => {
+              const parts = line.split(/(\*\*.*?\*\*)/g);
+              return (
+                <span key={i}>
+                  {parts.map((part, j) =>
+                    part.startsWith("**") && part.endsWith("**")
+                      ? <strong key={j} className="text-zinc-100 font-semibold">{part.slice(2, -2)}</strong>
+                      : part
+                  )}
+                  {"\n"}
+                </span>
+              );
+            })
+          )}
         </div>
       </div>
     </div>
