@@ -2159,13 +2159,13 @@ function buildMarketText(market: MarketSummaryData, manual: MarketManualData, ou
     return true;
   });
 
-  const tenDaysMs = 10 * 24 * 60 * 60 * 1000;
+  const fourteenDaysMs = 14 * 24 * 60 * 60 * 1000;
   const nowMs = Date.now();
   const filteredUpcoming = (market.upcomingOutages ?? []).filter((o) => {
     if (o.region.startsWith("SA") || o.region.startsWith("TAS")) return false;
     if (outageFuels && !outageFuels.has(o.fuel)) return false;
     const startMs = new Date(o.outageStart.replace(/\//g, "-")).getTime();
-    return startMs - nowMs <= tenDaysMs;
+    return startMs - nowMs <= fourteenDaysMs;
   });
 
   const fmtDate = (s: string) => new Date(s.replace(/\//g, "-")).toLocaleDateString("en-AU", { timeZone: "Australia/Brisbane", day: "numeric", month: "short" });
@@ -2432,13 +2432,13 @@ function buildMarketTableHtml(market: MarketSummaryData, manual: MarketManualDat
   }
 
   // Upcoming table
-  const tenDaysMs = 10 * 24 * 60 * 60 * 1000;
+  const fourteenDaysMs = 14 * 24 * 60 * 60 * 1000;
   const nowMs = Date.now();
   const filteredUpcoming = (market.upcomingOutages ?? []).filter((o) => {
     if (o.region.startsWith("SA") || o.region.startsWith("TAS")) return false;
     if (outageFuels && !outageFuels.has(o.fuel)) return false;
     const startMs = new Date(o.outageStart.replace(/\//g, "-")).getTime();
-    return startMs - nowMs <= tenDaysMs;
+    return startMs - nowMs <= fourteenDaysMs;
   });
   if (filteredUpcoming.length > 0) {
     parts.push(`<br><b${bStyle}>Upcoming Outages</b><br>`);
@@ -2751,11 +2751,11 @@ function MarketAnalysisTab() {
 
           {/* Upcoming outages — within 30 days */}
           {(() => {
-            const tenDays = 10 * 24 * 60 * 60 * 1000;
+            const fourteenDays = 14 * 24 * 60 * 60 * 1000;
             const now = Date.now();
             const upcoming = (market.upcomingOutages ?? []).filter((o) => {
               const startMs = new Date(o.outageStart.replace(/\//g, "-")).getTime();
-              return startMs - now <= tenDays;
+              return startMs - now <= fourteenDays;
             });
             return upcoming.length > 0 ? (
               <div className="rounded-lg border bg-card p-2.5 space-y-5">
