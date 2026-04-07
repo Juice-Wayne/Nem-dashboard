@@ -1,4 +1,5 @@
 import { fetchLatest, normaliseDate, SOURCES, getDuidInfoMap, setSourceChangedCallback } from "./fetcher";
+import { getNeopointP5MinPriceChanges } from "./neopoint";
 
 // --- Result cache ---
 
@@ -83,6 +84,14 @@ export async function getP5MinPriceChanges(): Promise<
 > {
   const cached = getCached<ReturnType<typeof getP5MinPriceChanges>>("p5price");
   if (cached) return cached;
+
+  // Try Neopoint first (real-time, no directory listing delay)
+  try {
+    const neoResults = await getNeopointP5MinPriceChanges();
+    return setCache("p5price", neoResults);
+  } catch {
+    // Fall back to NEMWeb
+  }
 
   const [current, previous] = await fetchLatest(SOURCES.p5min);
   const curRows = getTable(current, "REGIONSOLUTION");
