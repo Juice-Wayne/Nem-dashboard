@@ -19,7 +19,8 @@ async function safeQuery<T>(fn: () => Promise<T[]>, label: string): Promise<T[]>
 
 export async function GET(request: NextRequest) {
   try {
-    if (request.nextUrl.searchParams.has("force")) {
+    const isForce = request.nextUrl.searchParams.has("force");
+    if (isForce) {
       clearResultCache();
       clearDirCache();
     }
@@ -31,7 +32,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json(
       { prices, demand, interconnectors },
-      { headers: { "Cache-Control": "public, s-maxage=10, stale-while-revalidate=30" } },
+      { headers: isForce ? { "Cache-Control": "no-cache, no-store, must-revalidate" } : { "Cache-Control": "public, s-maxage=10, stale-while-revalidate=30" } },
     );
   } catch (error) {
     console.error("PD vs Actual API error:", error);

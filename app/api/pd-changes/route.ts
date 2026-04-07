@@ -24,14 +24,17 @@ async function safeQuery<T>(fn: () => Promise<T[]>, label: string): Promise<T[]>
 }
 
 const CACHE_HEADERS = { "Cache-Control": "public, s-maxage=10, stale-while-revalidate=30" };
+const NO_CACHE_HEADERS = { "Cache-Control": "no-cache, no-store, must-revalidate" };
 
 export async function GET(request: NextRequest) {
   try {
-    // Force refresh: clear all server-side caches
-    if (request.nextUrl.searchParams.has("force")) {
+    const isForce = request.nextUrl.searchParams.has("force");
+    // Force refresh: clear dir + result caches (CSV cache stays — files are immutable, keyed by URL)
+    if (isForce) {
       clearResultCache();
       clearDirCache();
     }
+    const headers = isForce ? NO_CACHE_HEADERS : CACHE_HEADERS;
 
     const type = request.nextUrl.searchParams.get("type");
 
@@ -57,7 +60,7 @@ export async function GET(request: NextRequest) {
         demand: { p5min: demandP5, predispatch: demandPD },
         interconnectors: { p5min: icP5, predispatch: icPD },
         sensitivities: { p5min: sensP5, predispatch: sensPD },
-      }, { headers: CACHE_HEADERS });
+      }, { headers });
     }
 
     // --- Prices (existing) ---
@@ -66,7 +69,7 @@ export async function GET(request: NextRequest) {
         getP5MinPriceChanges(),
         getPredispatchPriceChanges(),
       ]);
-      return NextResponse.json({ p5min, predispatch }, { headers: CACHE_HEADERS });
+      return NextResponse.json({ p5min, predispatch }, { headers });
     }
 
     // --- Demand ---
@@ -75,7 +78,7 @@ export async function GET(request: NextRequest) {
         getP5MinDemandChanges(),
         getPredispatchDemandChanges(),
       ]);
-      return NextResponse.json({ p5min, predispatch }, { headers: CACHE_HEADERS });
+      return NextResponse.json({ p5min, predispatch }, { headers });
     }
 
     // --- Interconnectors ---
@@ -84,7 +87,7 @@ export async function GET(request: NextRequest) {
         safeQuery(getP5MinInterconnectorChanges, "P5MIN_INTERCONNECTORSOLN"),
         safeQuery(getPredispatchInterconnectorChanges, "PREDISPATCHINTERCONNECTORRES"),
       ]);
-      return NextResponse.json({ p5min, predispatch }, { headers: CACHE_HEADERS });
+      return NextResponse.json({ p5min, predispatch }, { headers });
     }
 
     // --- Sensitivities ---
@@ -93,7 +96,7 @@ export async function GET(request: NextRequest) {
         safeQuery(getP5MinSensitivityChanges, "P5MIN_PRICESENSITIVITIES"),
         safeQuery(getPredispatchSensitivityChanges, "PREDISPATCH_PRICESENSITIVITIES"),
       ]);
-      return NextResponse.json({ p5min, predispatch }, { headers: CACHE_HEADERS });
+      return NextResponse.json({ p5min, predispatch }, { headers });
     }
 
     // Unknown type — fallback to prices
@@ -101,7 +104,7 @@ export async function GET(request: NextRequest) {
       getP5MinPriceChanges(),
       getPredispatchPriceChanges(),
     ]);
-    return NextResponse.json({ p5min, predispatch }, { headers: CACHE_HEADERS });
+    return NextResponse.json({ p5min, predispatch }, { headers });
   } catch (error) {
     console.error("PD Changes API error:", error);
     return NextResponse.json(

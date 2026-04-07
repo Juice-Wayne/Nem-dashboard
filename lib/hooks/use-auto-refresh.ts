@@ -9,11 +9,11 @@ const INTERVAL_MINUTES = 5;
 //   Fallback: poll every 30s to catch anything missed
 const TICK_OFFSETS = [
   // Wave 1: catch DispatchIS actuals (~15s after boundary)
-  10, 13, 16, 19, 22, 25,
+  10, 14, 18, 22, 26,
   // Wave 2: catch P5MIN forecasts (~60-140s after boundary)
-  55, 60, 65, 70, 75, 80, 85, 90, 95, 100, 105, 110, 115, 120, 125, 130, 135, 140, 145, 150, 155, 160,
+  55, 60, 65, 70, 80, 90, 100, 110, 120, 130, 140, 155,
   // Wave 3: fallback to catch stragglers
-  190, 220, 250, 280,
+  180, 220, 270,
 ];
 
 const forceFetcher = async (url: string) => {
@@ -73,7 +73,8 @@ export function useAutoRefresh<T>(
   const urlRef = useRef(url);
   urlRef.current = url;
 
-  // Aggressive scheduled polling — bypasses server caches on each tick
+  // Scheduled polling — uses forceFetcher to bust server caches on each tick
+  // so new AEMO files are picked up immediately
   useEffect(() => {
     if (!url) return;
 

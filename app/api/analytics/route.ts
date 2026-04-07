@@ -26,60 +26,63 @@ async function safeQuery<T>(fn: () => Promise<T[]>, label: string): Promise<T[]>
 }
 
 const CACHE_HEADERS = { "Cache-Control": "public, s-maxage=10, stale-while-revalidate=30" };
+const NO_CACHE_HEADERS = { "Cache-Control": "no-cache, no-store, must-revalidate" };
 
 export async function GET(request: NextRequest) {
   try {
-    if (request.nextUrl.searchParams.has("force")) {
+    const isForce = request.nextUrl.searchParams.has("force");
+    if (isForce) {
       clearResultCache();
       clearDirCache();
     }
+    const headers = isForce ? NO_CACHE_HEADERS : CACHE_HEADERS;
 
     const tab = request.nextUrl.searchParams.get("tab");
 
     if (tab === "generation") {
       const data = await safeQuery(getGenerationStack, "DISPATCH_UNIT_SCADA");
-      return NextResponse.json({ generation: data }, { headers: CACHE_HEADERS });
+      return NextResponse.json({ generation: data }, { headers });
     }
 
     if (tab === "constraints") {
       const data = await safeQuery(getBindingConstraints, "DISPATCH_CONSTRAINT");
-      return NextResponse.json({ constraints: data }, { headers: CACHE_HEADERS });
+      return NextResponse.json({ constraints: data }, { headers });
     }
 
     if (tab === "fcas") {
       const data = await safeQuery(getFcasPrices, "FCAS_PRICES");
-      return NextResponse.json({ fcas: data }, { headers: CACHE_HEADERS });
+      return NextResponse.json({ fcas: data }, { headers });
     }
 
     if (tab === "bidstack") {
       const data = await safeQuery(getBidStack, "BIDMOVE_COMPLETE");
-      return NextResponse.json({ bidstack: data }, { headers: CACHE_HEADERS });
+      return NextResponse.json({ bidstack: data }, { headers });
     }
 
     if (tab === "rooftoppv") {
       const data = await safeQuery(getRooftopPV, "ROOFTOP_PV");
-      return NextResponse.json({ rooftoppv: data }, { headers: CACHE_HEADERS });
+      return NextResponse.json({ rooftoppv: data }, { headers });
     }
 
     if (tab === "reserves") {
       const data = await safeQuery(getReserveMargins, "STPASA");
-      return NextResponse.json({ reserves: data }, { headers: CACHE_HEADERS });
+      return NextResponse.json({ reserves: data }, { headers });
     }
 
     if (tab === "rebids") {
       const data = await safeQuery(getRebidFeed, "BIDMOVE_REBIDS");
-      return NextResponse.json({ rebids: data }, { headers: CACHE_HEADERS });
+      return NextResponse.json({ rebids: data }, { headers });
     }
 
     if (tab === "spikes") {
       const hours = Number(request.nextUrl.searchParams.get("hours")) || 3;
       const data = await safeQuery(() => getPriceSpikes(hours), "PRICE_SPIKES");
-      return NextResponse.json({ spikes: data }, { headers: CACHE_HEADERS });
+      return NextResponse.json({ spikes: data }, { headers });
     }
 
     if (tab === "market") {
       const data = await getMarketSummary();
-      return NextResponse.json({ market: data }, { headers: CACHE_HEADERS });
+      return NextResponse.json({ market: data }, { headers });
     }
 
     if (tab === "startcost") {
@@ -95,7 +98,7 @@ export async function GET(request: NextRequest) {
       const day = (sp.get("day") === "d+1" ? "d+1" : "today") as "today" | "d+1";
       const sensScenario = sp.get("sensScenario") ? Number(sp.get("sensScenario")) : undefined;
       const data = await getStartCostAnalysis(region, config, day, sensScenario || undefined);
-      return NextResponse.json({ startcost: data }, { headers: CACHE_HEADERS });
+      return NextResponse.json({ startcost: data }, { headers });
     }
 
     // Default: return all
@@ -108,7 +111,7 @@ export async function GET(request: NextRequest) {
       safeQuery(getReserveMargins, "STPASA"),
     ]);
 
-    return NextResponse.json({ generation, constraints, fcas, bidstack, rooftoppv, reserves }, { headers: CACHE_HEADERS });
+    return NextResponse.json({ generation, constraints, fcas, bidstack, rooftoppv, reserves }, { headers });
   } catch (error) {
     console.error("Analytics API error:", error);
     return NextResponse.json(

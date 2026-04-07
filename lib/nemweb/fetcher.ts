@@ -17,12 +17,17 @@ interface CacheEntry<T> {
 const dirCache = new Map<string, CacheEntry<string[]>>();
 const csvCache = new Map<string, CacheEntry<Map<string, Record<string, string>[]>>>();
 
-const DIR_TTL = 5_000;    // 5s — aggressive polling to catch new AEMO files immediately
+const DIR_TTL = 5_000;    // 5s — check for new AEMO files frequently (cheap HTML scrape)
 const CSV_TTL = 300_000;  // 5min — files are immutable once published
 
 /** Clear directory cache — used for forced refresh to pick up newly published files */
 export function clearDirCache(): void {
   dirCache.clear();
+}
+
+/** Clear CSV cache — used for forced refresh to guarantee fresh file parses */
+export function clearCsvCache(): void {
+  csvCache.clear();
 }
 
 // In-flight request deduplication to avoid hammering AEMO with concurrent fetches
@@ -150,6 +155,15 @@ export const SOURCES = {
   rooftopPvForecast: { path: "/Reports/Current/Rooftop_PV/Forecast/", count: 1 },
 } as const;
 
+// Track the newest file per source path — when it changes, notify listeners
+const lastSeenFiles = new Map<string, string>();
+let onSourceChanged: ((path: string) => void) | null = null;
+
+/** Register a callback that fires when a source directory has new files */
+export function setSourceChangedCallback(cb: (path: string) => void): void {
+  onSourceChanged = cb;
+}
+
 /**
  * Fetch the N latest ZIPs from a NEMWeb directory, parse all CSVs,
  * and return an array of parsed table-maps (newest first).
@@ -159,6 +173,14 @@ export async function fetchLatest(
 ): Promise<Map<string, Record<string, string>[]>[]> {
   const links = await listDirectory(source.path);
   const toFetch = links.slice(0, source.count);
+
+  // Detect new files → notify so result caches can be invalidated
+  const sig = toFetch.join("|");
+  const prev = lastSeenFiles.get(source.path);
+  lastSeenFiles.set(source.path, sig);
+  if (prev !== undefined && prev !== sig && onSourceChanged) {
+    onSourceChanged(source.path);
+  }
 
   // Resolve relative URLs
   const urls = toFetch.map((link) =>
