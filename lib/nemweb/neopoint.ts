@@ -12,7 +12,6 @@ type P5PriceRow = {
 /** Build the AEST "from" param: current time minus 10 min buffer */
 function aestFrom(): string {
   const aest = new Date(Date.now() + 10 * 60 * 60 * 1000);
-  // Go back 10 minutes to ensure we capture the current + previous runs
   aest.setUTCMinutes(aest.getUTCMinutes() - 10);
   const y = aest.getUTCFullYear();
   const mo = String(aest.getUTCMonth() + 1).padStart(2, "0");
@@ -22,56 +21,9 @@ function aestFrom(): string {
   return `${y}-${mo}-${d} ${h}:${m}`;
 }
 
-/** Parse column key like "07 17:10.rrp" into ISO datetime */
-function parseIntervalKey(key: string, baseYear: number, baseMonth: number, baseDay: number): string | null {
-  const match = key.match(/^(\d{2})\s+(\d{2}):(\d{2})\.rrp$/);
-  if (!match) return null;
-  const day = parseInt(match[1]);
-  const hour = parseInt(match[2]);
-  const min = parseInt(match[3]);
-
-  // Handle month rollover (e.g., query on March 31, column shows "01")
-  let month = baseMonth;
-  if (day < baseDay - 15) month++;
-
-  return `${baseYear}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}T${String(hour).padStart(2, "0")}:${String(min).padStart(2, "0")}:00`;
-}
-
-/** Count non-null numeric .rrp values in a row */
-function countRrp(row: Record<string, unknown>): number {
-  let n = 0;
-  for (const [k, v] of Object.entries(row)) {
-    if (k.endsWith(".rrp") && v !== null && typeof v === "number") n++;
-  }
-  return n;
-}
-
-/** Find the best consecutive pair of runs with the most overlapping intervals */
-function findBestPair(
-  data: Record<string, unknown>[],
-): [Record<string, unknown>, Record<string, unknown>] | null {
-  const withData = data.filter((row) => countRrp(row) >= 1);
-  if (withData.length < 2) return null;
-
-  let bestPair: [Record<string, unknown>, Record<string, unknown>] | null = null;
-  let bestOverlap = 0;
-
-  for (let i = withData.length - 1; i >= 1; i--) {
-    let overlap = 0;
-    for (const [k, v] of Object.entries(withData[i])) {
-      if (k.endsWith(".rrp") && v !== null && typeof v === "number") {
-        const pv = withData[i - 1][k];
-        if (pv !== null && pv !== undefined && typeof pv === "number") overlap++;
-      }
-    }
-    if (overlap > bestOverlap) {
-      bestOverlap = overlap;
-      bestPair = [withData[i - 1], withData[i]];
-    }
-    if (withData.length - 1 - i > 15) break;
-  }
-
-  return bestOverlap >= 2 ? bestPair : null;
+/** Parse interval DateTime "2026-04-07 17:10:00" → ISO "2026-04-07T17:10:00" */
+function normaliseInterval(dt: string): string {
+  return dt.replace(" ", "T");
 }
 
 /** Fetch hour-ahead forecast data from Neopoint for one region */
@@ -84,50 +36,76 @@ async function fetchRegion(region: string, apiKey: string): Promise<Record<strin
 }
 
 /**
+ * Find the two latest P5MIN run columns from the data.
+ * Columns are like "07 19:10.rrp" — each represents a P5MIN run.
+ * Returns [previousRunCol, currentRunCol] sorted by run time descending.
+ */
+function findLatestTwoRunColumns(data: Record<string, unknown>[]): [string, string] | null {
+  // Collect all .rrp column names that have at least one non-null value
+  const colsWithData = new Set<string>();
+  for (const row of data) {
+    for (const [key, val] of Object.entries(row)) {
+      if (key.endsWith(".rrp") && val !== null && typeof val === "number") {
+        colsWithData.add(key);
+      }
+    }
+  }
+
+  if (colsWithData.size < 2) return null;
+
+  // Sort columns by time descending (e.g., "07 19:10.rrp" > "07 19:05.rrp")
+  const sorted = [...colsWithData].sort((a, b) => b.localeCompare(a));
+  return [sorted[1], sorted[0]]; // [previous, current]
+}
+
+/**
+ * Extract price changes by comparing the two latest P5MIN run columns.
+ * Rows = intervals, columns = runs.
+ */
+function extractChanges(data: Record<string, unknown>[], region: string): P5PriceRow[] {
+  const cols = findLatestTwoRunColumns(data);
+  if (!cols) return [];
+  const [prevCol, curCol] = cols;
+
+  const results: P5PriceRow[] = [];
+  for (const row of data) {
+    const dt = row.DateTime as string | undefined;
+    if (!dt) continue;
+
+    const curVal = row[curCol];
+    const prevVal = row[prevCol];
+    if (curVal === null || curVal === undefined || typeof curVal !== "number") continue;
+    if (prevVal === null || prevVal === undefined || typeof prevVal !== "number") continue;
+
+    results.push({
+      INTERVAL_DATETIME: normaliseInterval(dt),
+      REGIONID: region,
+      CURRENT_RRP: curVal,
+      PREVIOUS_RRP: prevVal,
+      DELTA: curVal - prevVal,
+    });
+  }
+
+  return results;
+}
+
+/**
  * Fetch P5MIN price changes from Neopoint for all NEM regions.
- * Uses "Prices Hour ahead forecasts" with period=Two Hours and a tight from= window.
- * The response contains every P5MIN run as a row with forecast columns —
- * we compare the last two runs with the most overlapping intervals.
+ * Uses "Prices Hour ahead forecasts" with period=Two Hours.
+ * Rows = intervals, columns = P5MIN runs. We compare the last two run columns.
  *
- * Returns the same shape as getP5MinPriceChanges() from NEMWeb.
- * Throws on failure — caller should catch and fall back to NEMWeb.
+ * Returns the same shape as the old NEMWeb getP5MinPriceChanges().
  */
 export async function getNeopointP5MinPriceChanges(): Promise<P5PriceRow[]> {
   const apiKey = process.env.NEOPOINT_API_KEY;
   if (!apiKey) throw new Error("NEOPOINT_API_KEY not set");
 
-  const aest = new Date(Date.now() + 10 * 60 * 60 * 1000);
-  const baseYear = aest.getUTCFullYear();
-  const baseMonth = aest.getUTCMonth() + 1;
-  const baseDay = aest.getUTCDate();
-
   // Fetch all regions in parallel
   const regionData = await Promise.all(REGIONS.map((r) => fetchRegion(r, apiKey)));
 
   const allResults: P5PriceRow[] = [];
-
   for (let i = 0; i < REGIONS.length; i++) {
-    const pair = findBestPair(regionData[i]);
-    if (!pair) continue;
-    const [prevRun, curRun] = pair;
-
-    for (const [key, curVal] of Object.entries(curRun)) {
-      if (!key.endsWith(".rrp")) continue;
-      if (curVal === null || typeof curVal !== "number") continue;
-      const prevVal = prevRun[key];
-      if (prevVal === null || prevVal === undefined || typeof prevVal !== "number") continue;
-
-      const interval = parseIntervalKey(key, baseYear, baseMonth, baseDay);
-      if (!interval) continue;
-
-      allResults.push({
-        INTERVAL_DATETIME: interval,
-        REGIONID: REGIONS[i],
-        CURRENT_RRP: curVal,
-        PREVIOUS_RRP: prevVal,
-        DELTA: curVal - prevVal,
-      });
-    }
+    allResults.push(...extractChanges(regionData[i], REGIONS[i]));
   }
 
   if (allResults.length === 0) {
