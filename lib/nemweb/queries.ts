@@ -1,4 +1,4 @@
-import { fetchLatest, normaliseDate, SOURCES, getDuidInfoMap } from "./fetcher";
+import { fetchLatest, normaliseDate, SOURCES, getDuidInfoMap, setSourceChangedCallback } from "./fetcher";
 
 // --- Result cache ---
 
@@ -8,7 +8,7 @@ interface CacheEntry<T> {
 }
 
 const resultCache = new Map<string, CacheEntry<unknown>>();
-const RESULT_TTL = 5_000;  // 5s — aggressive to pick up new data immediately
+const RESULT_TTL = 60_000; // 60s — auto-invalidated sooner when new files appear; force bypasses entirely
 
 function getCached<T>(key: string): T | null {
   const c = resultCache.get(key);
@@ -25,6 +25,27 @@ function setCache<T>(key: string, data: T): T {
 export function clearResultCache(): void {
   resultCache.clear();
 }
+
+// --- Auto-invalidation: when AEMO publishes new files, drop stale result caches ---
+// Map source directory paths to the result cache keys they feed
+const SOURCE_TO_CACHE_KEYS: Record<string, string[]> = {
+  [SOURCES.p5min.path]: ["p5price", "p5demand", "p5ic", "vsPrice", "vsDemand", "vsIC", "marketSummary"],
+  [SOURCES.predispatch.path]: ["pdprice", "pddemand", "pdic", "pdsens", "marketSummary"],
+  [SOURCES.dispatch.path]: ["vsPrice", "vsDemand", "vsIC", "genStack", "constraints", "fcas", "marketSummary"],
+  [SOURCES.sensitivities.path]: ["pdsens"],
+  [SOURCES.dispatchScada.path]: ["genStack", "marketSummary"],
+  [SOURCES.bidmove.path]: ["bidstack", "rebidFeed"],
+  [SOURCES.stpasa.path]: ["reserves"],
+  [SOURCES.rooftopPvActual.path]: ["rooftoppv", "marketSummary"],
+  [SOURCES.rooftopPvForecast.path]: ["rooftoppv", "marketSummary"],
+};
+
+setSourceChangedCallback((path: string) => {
+  const keys = SOURCE_TO_CACHE_KEYS[path];
+  if (keys) {
+    for (const key of keys) resultCache.delete(key);
+  }
+});
 
 // --- Helpers ---
 
