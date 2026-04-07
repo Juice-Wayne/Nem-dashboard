@@ -85,40 +85,7 @@ export async function getP5MinPriceChanges(): Promise<
   const cached = getCached<ReturnType<typeof getP5MinPriceChanges>>("p5price");
   if (cached) return cached;
 
-  // Try Neopoint first (real-time, no directory listing delay)
-  try {
-    const neoResults = await getNeopointP5MinPriceChanges();
-    return setCache("p5price", neoResults);
-  } catch {
-    // Fall back to NEMWeb
-  }
-
-  const [current, previous] = await fetchLatest(SOURCES.p5min);
-  const curRows = getTable(current, "REGIONSOLUTION");
-  const prevRows = getTable(previous, "REGIONSOLUTION");
-
-  // Build lookup: interval+region → RRP from previous run
-  const prevMap = new Map<string, number>();
-  for (const r of prevRows) {
-    prevMap.set(`${r.INTERVAL_DATETIME}|${r.REGIONID}`, num(r.RRP));
-  }
-
-  const results: { INTERVAL_DATETIME: string; REGIONID: string; CURRENT_RRP: number; PREVIOUS_RRP: number; DELTA: number }[] = [];
-  for (const r of curRows) {
-    const key = `${r.INTERVAL_DATETIME}|${r.REGIONID}`;
-    const prev = prevMap.get(key);
-    if (prev === undefined) continue;
-    const cur = num(r.RRP);
-    results.push({
-      INTERVAL_DATETIME: normaliseDate(r.INTERVAL_DATETIME),
-      REGIONID: r.REGIONID,
-      CURRENT_RRP: cur,
-      PREVIOUS_RRP: prev,
-      DELTA: cur - prev,
-    });
-  }
-
-  results.sort((a, b) => Math.abs(b.DELTA) - Math.abs(a.DELTA));
+  const results = await getNeopointP5MinPriceChanges();
   return setCache("p5price", results);
 }
 
