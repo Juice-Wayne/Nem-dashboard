@@ -1,60 +1,44 @@
 const NEOPOINT_BASE = "https://neopoint.com.au/Service/Json";
 
-// Key WEM facilities to track
-const FACILITIES = [
-  "COLLIE_G1", "MUJA_G5", "MUJA_G6", "MUJA_G7", "MUJA_G8",
-  "NEWGEN_KWINANA_CCG1", "NEWGEN_NEERABUP_GT1",
-  "ALINTA_PNJ_U1", "ALINTA_PNJ_U2", "ALINTA_WGP",
-  "ALBANY_WF1", "GRASMERE_WF1", "YANDIN_WF1",
-  "GREENOUGH_RIVER_PV1", "MERREDIN_SFM",
-];
-
-export type WEMFacilityGen = {
-  facilityCode: string;
-  currentMW: number;        // latest 5-min reading
+export type WEMGeneration = {
+  DateTime: string;
+  TotalMW: number;
+  isForecast: boolean;
 };
 
-/** Build AWST "from" for last 30 min of data */
-function awstRecent(): string {
+/** Build AWST "from" param — start of today */
+function awstToday(): string {
   const awst = new Date(Date.now() + 8 * 60 * 60 * 1000);
-  awst.setUTCMinutes(awst.getUTCMinutes() - 30);
   const y = awst.getUTCFullYear();
   const mo = String(awst.getUTCMonth() + 1).padStart(2, "0");
   const d = String(awst.getUTCDate()).padStart(2, "0");
-  const h = String(awst.getUTCHours()).padStart(2, "0");
-  const m = String(awst.getUTCMinutes()).padStart(2, "0");
-  return `${y}-${mo}-${d} ${h}:${m}`;
+  return `${y}-${mo}-${d} 00:00`;
 }
 
-export async function getWEMGeneration(): Promise<WEMFacilityGen[]> {
+export async function getWEMGeneration(): Promise<WEMGeneration[]> {
   const apiKey = process.env.NEOPOINT_API_KEY;
   if (!apiKey) throw new Error("NEOPOINT_API_KEY not set");
 
-  const from = awstRecent();
-  // Fetch all facilities in parallel
-  const results = await Promise.all(
-    FACILITIES.map(async (code) => {
-      try {
-        const url = `${NEOPOINT_BASE}?f=401%20WEM%5CFacility%20Generation&from=${encodeURIComponent(from)}&period=Two%20Hours&instances=${code}&section=-1&key=${apiKey}`;
-        const res = await fetch(url, { cache: "no-store" });
-        if (!res.ok) return null;
-        const data: Record<string, unknown>[] = await res.json();
-        if (!Array.isArray(data) || data.length === 0) return null;
-        // Take the last non-null reading
-        for (let i = data.length - 1; i >= 0; i--) {
-          const gen = data[i][".Generation"];
-          if (gen !== null && typeof gen === "number") {
-            return { facilityCode: code, currentMW: gen };
-          }
-        }
-        return null;
-      } catch {
-        return null;
-      }
-    }),
-  );
+  const from = awstToday();
+  const url = `${NEOPOINT_BASE}?f=401%20WEM%5CTotal%20Generation%20(Actual%20%2B%20Projection)&from=${encodeURIComponent(from)}&period=Daily&instances=&section=-1&key=${apiKey}`;
+  const res = await fetch(url, { cache: "no-store" });
+  if (!res.ok) throw new Error(`Neopoint WEM generation: HTTP ${res.status}`);
+  const data: Record<string, unknown>[] = await res.json();
 
-  return results
-    .filter((r): r is WEMFacilityGen => r !== null)
-    .sort((a, b) => b.currentMW - a.currentMW);
+  const results: WEMGeneration[] = [];
+  for (const r of data) {
+    const dt = r.DateTime as string | undefined;
+    if (!dt) continue;
+
+    const actual = r[".Total Generation"];
+    const forecast = r[".Total Generation P5"];
+
+    if (actual !== null && typeof actual === "number") {
+      results.push({ DateTime: dt.replace(" ", "T"), TotalMW: actual, isForecast: false });
+    } else if (forecast !== null && typeof forecast === "number") {
+      results.push({ DateTime: dt.replace(" ", "T"), TotalMW: forecast, isForecast: true });
+    }
+  }
+
+  return results;
 }

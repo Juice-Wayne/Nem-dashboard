@@ -166,12 +166,11 @@ type Direction = "all" | "increase" | "decrease";
 type WEMPrice = { DateTime: string; FinalPrice: number; isForecast: boolean };
 type WEMDemand = { asAt: string; demandMW: number; withdrawalMW: number };
 type WEMOfflineUnit = { facilityCode: string; offlineMW: number };
-type WEMFacilityGen = { facilityCode: string; currentMW: number };
+type WEMGeneration = { DateTime: string; TotalMW: number; isForecast: boolean };
 type WEMData = {
   prices: WEMPrice[] | null;
   demand: WEMDemand | null;
-  offline: WEMOfflineUnit[] | null;
-  generation: WEMFacilityGen[] | null;
+  generation: WEMGeneration[] | null;
 };
 
 type TabId = "prices" | "demand" | "interconnectors" | "sensitivities" | "actuals" | "spikes" | "startcost" | "market" | "wem";
@@ -282,31 +281,44 @@ function deltaColor(delta: number | null | undefined): string {
 
 function WEMTab({ data }: { data: WEMData | null }) {
   const prices = data?.prices ?? [];
-  // Split into actuals and forecasts for charting
   const actuals = prices.filter((p) => !p.isForecast);
   const forecasts = prices.filter((p) => p.isForecast);
-  const currentPrice = forecasts.length ? forecasts[0] : (actuals.length ? actuals[actuals.length - 1] : null);
+  // Current interval = last dispatched actual
+  const currentPrice = actuals.length ? actuals[actuals.length - 1] : null;
   const demand = data?.demand;
+  const gen = data?.generation ?? [];
+  const genActuals = gen.filter((g) => !g.isForecast);
+  const currentGen = genActuals.length ? genActuals[genActuals.length - 1] : null;
 
-  // Build chart data: actuals have ActualPrice, forecasts have ForecastPrice
-  const chartData = prices.map((p) => ({
+  // Price chart data
+  const priceChartData = prices.map((p) => ({
     DateTime: p.DateTime,
     ActualPrice: p.isForecast ? null : p.FinalPrice,
     ForecastPrice: p.isForecast ? p.FinalPrice : null,
   }));
 
+  // Generation chart data
+  const genChartData = gen.map((g) => ({
+    DateTime: g.DateTime,
+    ActualMW: g.isForecast ? null : g.TotalMW,
+    ForecastMW: g.isForecast ? g.TotalMW : null,
+  }));
+
   return (
     <div className="space-y-6">
       {/* Summary cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <Card className="rounded-xl">
-          <CardHeader><CardTitle className="text-base">Current Energy Price (AWST)</CardTitle></CardHeader>
+          <CardHeader><CardTitle className="text-base">Energy Price</CardTitle></CardHeader>
           <CardContent>
             {currentPrice ? (
               <div>
                 <span className="text-3xl font-bold font-mono">{formatCurrency(currentPrice.FinalPrice)}</span>
                 <span className="text-sm text-zinc-500 ml-2">/MWh</span>
-                <p className="text-xs text-zinc-500 mt-1">{currentPrice.DateTime.slice(11, 16)} AWST{currentPrice.isForecast ? " (forecast)" : ""}</p>
+                <p className="text-xs text-zinc-500 mt-1">{currentPrice.DateTime.slice(11, 16)} AWST</p>
+                {forecasts.length > 0 && (
+                  <p className="text-xs text-zinc-400 mt-0.5">Next: {formatCurrency(forecasts[0].FinalPrice)} @ {forecasts[0].DateTime.slice(11, 16)}</p>
+                )}
               </div>
             ) : <LoadingState />}
           </CardContent>
@@ -324,36 +336,64 @@ function WEMTab({ data }: { data: WEMData | null }) {
             ) : <LoadingState />}
           </CardContent>
         </Card>
+
+        <Card className="rounded-xl">
+          <CardHeader><CardTitle className="text-base">Total Generation</CardTitle></CardHeader>
+          <CardContent>
+            {currentGen ? (
+              <div>
+                <span className="text-3xl font-bold font-mono">{Math.round(currentGen.TotalMW).toLocaleString()}</span>
+                <span className="text-sm text-zinc-500 ml-2">MW</span>
+                <p className="text-xs text-zinc-500 mt-1">{currentGen.DateTime.slice(11, 16)} AWST</p>
+              </div>
+            ) : <LoadingState />}
+          </CardContent>
+        </Card>
       </div>
 
-      {/* Price chart — actuals (solid) + forecast (dashed) */}
+      {/* Price chart */}
       <Card className="rounded-xl">
         <CardHeader><CardTitle className="text-base">Energy Price — Today (5-min, AWST)</CardTitle></CardHeader>
         <CardContent>
-          {chartData.length > 0 ? (
-            <div className="h-[350px]">
+          {priceChartData.length > 0 ? (
+            <div className="h-[300px]">
               <ResponsiveContainer width="100%" height="100%">
-                <ComposedChart data={chartData}>
+                <ComposedChart data={priceChartData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
-                  <XAxis
-                    dataKey="DateTime"
-                    tickFormatter={(v: string) => v.slice(11, 16)}
-                    tick={{ fill: "#a1a1aa", fontSize: 11 }}
-                  />
-                  <YAxis
-                    tick={{ fill: "#a1a1aa", fontSize: 11 }}
-                    tickFormatter={(v: number) => `$${v}`}
-                  />
+                  <XAxis dataKey="DateTime" tickFormatter={(v: string) => v.slice(11, 16)} tick={{ fill: "#a1a1aa", fontSize: 11 }} />
+                  <YAxis tick={{ fill: "#a1a1aa", fontSize: 11 }} tickFormatter={(v: number) => `$${v}`} />
                   <Tooltip
                     contentStyle={{ backgroundColor: "#18181b", border: "1px solid #27272a", borderRadius: 8 }}
                     labelFormatter={(v: unknown) => String(v).slice(11, 16) + " AWST"}
-                    formatter={(v: unknown, name: unknown) => [
-                      `$${Number(v).toFixed(2)}/MWh`,
-                      name === "ActualPrice" ? "Actual" : "Forecast",
-                    ]}
+                    formatter={(v: unknown, name: unknown) => [`$${Number(v).toFixed(2)}/MWh`, name === "ActualPrice" ? "Actual" : "Forecast"]}
                   />
                   <Area type="monotone" dataKey="ActualPrice" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.1} connectNulls={false} />
                   <Area type="monotone" dataKey="ForecastPrice" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.05} strokeDasharray="5 3" connectNulls={false} />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </div>
+          ) : <LoadingState />}
+        </CardContent>
+      </Card>
+
+      {/* Generation chart */}
+      <Card className="rounded-xl">
+        <CardHeader><CardTitle className="text-base">Total Generation — Today (5-min, AWST)</CardTitle></CardHeader>
+        <CardContent>
+          {genChartData.length > 0 ? (
+            <div className="h-[300px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <ComposedChart data={genChartData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+                  <XAxis dataKey="DateTime" tickFormatter={(v: string) => v.slice(11, 16)} tick={{ fill: "#a1a1aa", fontSize: 11 }} />
+                  <YAxis tick={{ fill: "#a1a1aa", fontSize: 11 }} tickFormatter={(v: number) => `${v} MW`} />
+                  <Tooltip
+                    contentStyle={{ backgroundColor: "#18181b", border: "1px solid #27272a", borderRadius: 8 }}
+                    labelFormatter={(v: unknown) => String(v).slice(11, 16) + " AWST"}
+                    formatter={(v: unknown, name: unknown) => [`${Math.round(Number(v)).toLocaleString()} MW`, name === "ActualMW" ? "Actual" : "Forecast"]}
+                  />
+                  <Area type="monotone" dataKey="ActualMW" stroke="#10b981" fill="#10b981" fillOpacity={0.1} connectNulls={false} />
+                  <Area type="monotone" dataKey="ForecastMW" stroke="#10b981" fill="#10b981" fillOpacity={0.05} strokeDasharray="5 3" connectNulls={false} />
                 </ComposedChart>
               </ResponsiveContainer>
             </div>
