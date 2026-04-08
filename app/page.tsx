@@ -10,7 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   XAxis, YAxis, Tooltip, ResponsiveContainer,
   Area, ReferenceLine,
-  ComposedChart,
+  ComposedChart, CartesianGrid,
 } from "recharts";
 import {
   Select,
@@ -163,7 +163,18 @@ const IC_OPTIONS = Object.entries(INTERCONNECTORS).map(([id, ic]) => ({
 
 type Direction = "all" | "increase" | "decrease";
 
-type TabId = "prices" | "demand" | "interconnectors" | "sensitivities" | "actuals" | "spikes" | "startcost" | "market";
+type WEMPrice = { DateTime: string; FinalPrice: number };
+type WEMDemand = { asAt: string; demandMW: number; withdrawalMW: number };
+type WEMOfflineUnit = { facilityCode: string; offlineMW: number };
+type WEMFacilityGen = { facilityCode: string; currentMW: number };
+type WEMData = {
+  prices: WEMPrice[] | null;
+  demand: WEMDemand | null;
+  offline: WEMOfflineUnit[] | null;
+  generation: WEMFacilityGen[] | null;
+};
+
+type TabId = "prices" | "demand" | "interconnectors" | "sensitivities" | "actuals" | "spikes" | "startcost" | "market" | "wem";
 
 // --- Helpers ---
 
@@ -267,6 +278,122 @@ function deltaColor(delta: number | null | undefined): string {
   return "text-zinc-600";
 }
 
+// --- WEM Tab ---
+
+function WEMTab({ data }: { data: WEMData | null }) {
+  const latestPrice = data?.prices?.length ? data.prices[data.prices.length - 1] : null;
+  const demand = data?.demand;
+
+  return (
+    <div className="space-y-6">
+      {/* Summary cards */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <Card className="rounded-xl">
+          <CardHeader><CardTitle className="text-base">Energy Price</CardTitle></CardHeader>
+          <CardContent>
+            {latestPrice ? (
+              <div>
+                <span className="text-2xl font-bold font-mono">{formatCurrency(latestPrice.FinalPrice)}</span>
+                <span className="text-xs text-zinc-500 ml-2">/MWh</span>
+                <p className="text-xs text-zinc-500 mt-1">{formatShortTime(latestPrice.DateTime)}</p>
+              </div>
+            ) : <LoadingState />}
+          </CardContent>
+        </Card>
+
+        <Card className="rounded-xl">
+          <CardHeader><CardTitle className="text-base">Operational Demand</CardTitle></CardHeader>
+          <CardContent>
+            {demand ? (
+              <div>
+                <span className="text-2xl font-bold font-mono">{Math.round(demand.demandMW).toLocaleString()}</span>
+                <span className="text-xs text-zinc-500 ml-2">MW</span>
+                <p className="text-xs text-zinc-500 mt-1">Withdrawal: {Math.round(demand.withdrawalMW).toLocaleString()} MW</p>
+              </div>
+            ) : <LoadingState />}
+          </CardContent>
+        </Card>
+
+        <Card className="rounded-xl">
+          <CardHeader><CardTitle className="text-base">Offline Capacity</CardTitle></CardHeader>
+          <CardContent>
+            {data?.offline !== undefined ? (
+              data.offline && data.offline.length > 0 ? (
+                <div className="space-y-1">
+                  {data.offline.map((u) => (
+                    <div key={u.facilityCode} className="flex justify-between text-sm">
+                      <span className="font-mono text-xs">{u.facilityCode}</span>
+                      <span className="font-mono text-xs text-rose-400">{u.offlineMW} MW</span>
+                    </div>
+                  ))}
+                </div>
+              ) : <p className="text-sm text-zinc-500">All units in service</p>
+            ) : <LoadingState />}
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Price chart */}
+      <Card className="rounded-xl">
+        <CardHeader><CardTitle className="text-base">Energy Price — Today (AWST)</CardTitle></CardHeader>
+        <CardContent>
+          {data?.prices && data.prices.length > 0 ? (
+            <div className="h-[300px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <ComposedChart data={data.prices}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+                  <XAxis
+                    dataKey="DateTime"
+                    tickFormatter={(v: string) => v.slice(11, 16)}
+                    tick={{ fill: "#a1a1aa", fontSize: 11 }}
+                  />
+                  <YAxis
+                    tick={{ fill: "#a1a1aa", fontSize: 11 }}
+                    tickFormatter={(v: number) => `$${v}`}
+                  />
+                  <Tooltip
+                    contentStyle={{ backgroundColor: "#18181b", border: "1px solid #27272a", borderRadius: 8 }}
+                    labelFormatter={(v: any) => String(v).slice(11, 16) + " AWST"}
+                    formatter={(v: any) => [`$${Number(v).toFixed(2)}/MWh`, "Price"]}
+                  />
+                  <Area type="monotone" dataKey="FinalPrice" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.1} />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </div>
+          ) : <LoadingState />}
+        </CardContent>
+      </Card>
+
+      {/* Generation table */}
+      <Card className="rounded-xl">
+        <CardHeader><CardTitle className="text-base">Facility Generation</CardTitle></CardHeader>
+        <CardContent>
+          {data?.generation && data.generation.length > 0 ? (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Facility</TableHead>
+                  <TableHead className="text-right">Output (MW)</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {data.generation.map((g) => (
+                  <TableRow key={g.facilityCode}>
+                    <TableCell className="font-mono text-xs">{g.facilityCode}</TableCell>
+                    <TableCell className="text-right font-mono tabular-nums text-sm">
+                      {g.currentMW.toFixed(1)}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          ) : <LoadingState />}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 // --- Page ---
 
 export default function HomePage() {
@@ -309,6 +436,11 @@ export default function HomePage() {
     manualRefresh: refreshActuals,
     lastRefreshedAt: actualsRefreshedAt,
   } = useAutoRefresh<ActualsData>("/api/pd-vs-actual");
+
+  const {
+    data: wemData,
+    isValidating: isRefreshingWEM,
+  } = useAutoRefresh<WEMData>("/api/wem");
 
   const lastRefreshedAt = changesRefreshedAt ?? actualsRefreshedAt ?? null;
 
@@ -402,6 +534,7 @@ export default function HomePage() {
               <TabsTrigger value="spikes">Spikes</TabsTrigger>
               <TabsTrigger value="startcost">BR Start</TabsTrigger>
               <TabsTrigger value="market">Market</TabsTrigger>
+              <TabsTrigger value="wem">WEM</TabsTrigger>
             </TabsList>
             <button
               onClick={handleManualRefresh}
@@ -586,6 +719,11 @@ export default function HomePage() {
         {/* === MARKET ANALYSIS TAB === */}
         <TabsContent value="market" className="mt-4">
           <MarketAnalysisTab />
+        </TabsContent>
+
+        {/* === WEM TAB === */}
+        <TabsContent value="wem" className="mt-4">
+          <WEMTab data={wemData ?? null} />
         </TabsContent>
       </Tabs>
     </div>
