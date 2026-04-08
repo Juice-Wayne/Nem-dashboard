@@ -281,21 +281,24 @@ function deltaColor(delta: number | null | undefined): string {
 // --- WEM Tab ---
 
 function WEMTab({ data }: { data: WEMData | null }) {
-  const latestPrice = data?.prices?.length ? data.prices[data.prices.length - 1] : null;
+  // Find the latest non-null price (current dispatch interval)
+  const prices = data?.prices ?? [];
+  const dispatched = prices.filter((p) => p.FinalPrice !== null);
+  const latestPrice = dispatched.length ? dispatched[dispatched.length - 1] : null;
   const demand = data?.demand;
 
   return (
     <div className="space-y-6">
       {/* Summary cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <Card className="rounded-xl">
-          <CardHeader><CardTitle className="text-base">Energy Price</CardTitle></CardHeader>
+          <CardHeader><CardTitle className="text-base">Current Energy Price (AWST)</CardTitle></CardHeader>
           <CardContent>
             {latestPrice ? (
               <div>
-                <span className="text-2xl font-bold font-mono">{formatCurrency(latestPrice.FinalPrice)}</span>
-                <span className="text-xs text-zinc-500 ml-2">/MWh</span>
-                <p className="text-xs text-zinc-500 mt-1">{formatShortTime(latestPrice.DateTime)}</p>
+                <span className="text-3xl font-bold font-mono">{formatCurrency(latestPrice.FinalPrice)}</span>
+                <span className="text-sm text-zinc-500 ml-2">/MWh</span>
+                <p className="text-xs text-zinc-500 mt-1">Interval: {latestPrice.DateTime.slice(11, 16)} AWST</p>
               </div>
             ) : <LoadingState />}
           </CardContent>
@@ -306,41 +309,23 @@ function WEMTab({ data }: { data: WEMData | null }) {
           <CardContent>
             {demand ? (
               <div>
-                <span className="text-2xl font-bold font-mono">{Math.round(demand.demandMW).toLocaleString()}</span>
-                <span className="text-xs text-zinc-500 ml-2">MW</span>
-                <p className="text-xs text-zinc-500 mt-1">Withdrawal: {Math.round(demand.withdrawalMW).toLocaleString()} MW</p>
+                <span className="text-3xl font-bold font-mono">{Math.round(demand.demandMW).toLocaleString()}</span>
+                <span className="text-sm text-zinc-500 ml-2">MW</span>
+                <p className="text-xs text-zinc-500 mt-1">Behind-the-meter: {Math.abs(Math.round(demand.withdrawalMW)).toLocaleString()} MW</p>
               </div>
-            ) : <LoadingState />}
-          </CardContent>
-        </Card>
-
-        <Card className="rounded-xl">
-          <CardHeader><CardTitle className="text-base">Offline Capacity</CardTitle></CardHeader>
-          <CardContent>
-            {data?.offline !== undefined ? (
-              data.offline && data.offline.length > 0 ? (
-                <div className="space-y-1">
-                  {data.offline.map((u) => (
-                    <div key={u.facilityCode} className="flex justify-between text-sm">
-                      <span className="font-mono text-xs">{u.facilityCode}</span>
-                      <span className="font-mono text-xs text-rose-400">{u.offlineMW} MW</span>
-                    </div>
-                  ))}
-                </div>
-              ) : <p className="text-sm text-zinc-500">All units in service</p>
             ) : <LoadingState />}
           </CardContent>
         </Card>
       </div>
 
-      {/* Price chart */}
+      {/* Price chart — only show dispatched intervals (non-null) */}
       <Card className="rounded-xl">
-        <CardHeader><CardTitle className="text-base">Energy Price — Today (AWST)</CardTitle></CardHeader>
+        <CardHeader><CardTitle className="text-base">Energy Price — Today (5-min intervals, AWST)</CardTitle></CardHeader>
         <CardContent>
-          {data?.prices && data.prices.length > 0 ? (
-            <div className="h-[300px]">
+          {dispatched.length > 0 ? (
+            <div className="h-[350px]">
               <ResponsiveContainer width="100%" height="100%">
-                <ComposedChart data={data.prices}>
+                <ComposedChart data={dispatched}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
                   <XAxis
                     dataKey="DateTime"
@@ -353,40 +338,13 @@ function WEMTab({ data }: { data: WEMData | null }) {
                   />
                   <Tooltip
                     contentStyle={{ backgroundColor: "#18181b", border: "1px solid #27272a", borderRadius: 8 }}
-                    labelFormatter={(v: any) => String(v).slice(11, 16) + " AWST"}
-                    formatter={(v: any) => [`$${Number(v).toFixed(2)}/MWh`, "Price"]}
+                    labelFormatter={(v: unknown) => String(v).slice(11, 16) + " AWST"}
+                    formatter={(v: unknown) => [`$${Number(v).toFixed(2)}/MWh`, "Price"]}
                   />
                   <Area type="monotone" dataKey="FinalPrice" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.1} />
                 </ComposedChart>
               </ResponsiveContainer>
             </div>
-          ) : <LoadingState />}
-        </CardContent>
-      </Card>
-
-      {/* Generation table */}
-      <Card className="rounded-xl">
-        <CardHeader><CardTitle className="text-base">Facility Generation</CardTitle></CardHeader>
-        <CardContent>
-          {data?.generation && data.generation.length > 0 ? (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Facility</TableHead>
-                  <TableHead className="text-right">Output (MW)</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {data.generation.map((g) => (
-                  <TableRow key={g.facilityCode}>
-                    <TableCell className="font-mono text-xs">{g.facilityCode}</TableCell>
-                    <TableCell className="text-right font-mono tabular-nums text-sm">
-                      {g.currentMW.toFixed(1)}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
           ) : <LoadingState />}
         </CardContent>
       </Card>

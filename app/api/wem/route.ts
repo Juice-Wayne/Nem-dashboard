@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getWEMPrices, getWEMDemand, getWEMOfflineCapacity, getWEMGeneration } from "@/lib/wem";
+import { getWEMPrices, getWEMDemand } from "@/lib/wem";
 
 async function safe<T>(fn: () => Promise<T>, label: string): Promise<T | null> {
   try {
@@ -18,14 +18,12 @@ export async function GET(request: NextRequest) {
     const isForce = request.nextUrl.searchParams.has("force");
     const headers = isForce ? NO_CACHE_HEADERS : CACHE_HEADERS;
 
-    const [prices, demand, offline, generation] = await Promise.all([
+    const [prices, demand] = await Promise.all([
       safe(getWEMPrices, "prices"),
       safe(getWEMDemand, "demand"),
-      safe(getWEMOfflineCapacity, "offline"),
-      safe(getWEMGeneration, "generation"),
     ]);
 
-    return NextResponse.json({ prices, demand, offline, generation }, { headers });
+    return NextResponse.json({ prices, demand }, { headers });
   } catch (error) {
     console.error("WEM API error:", error);
     return NextResponse.json(
