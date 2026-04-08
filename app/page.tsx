@@ -471,7 +471,7 @@ export default function HomePage() {
   const clearSelection = () => setSelectedRow(null);
 
   // Determine if we show region or interconnector selector
-  const isAnalyticsTab = activeTab === "spikes" || activeTab === "startcost" || activeTab === "market";
+  const isAnalyticsTab = activeTab === "spikes" || activeTab === "startcost" || activeTab === "market" || activeTab === "wem";
   const showRegionSelector = !isAnalyticsTab && activeTab !== "interconnectors";
   const showInterconnectorSelector = activeTab === "interconnectors";
   const showFilters = !isAnalyticsTab;
