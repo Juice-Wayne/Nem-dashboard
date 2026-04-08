@@ -290,19 +290,25 @@ function WEMTab({ data }: { data: WEMData | null }) {
   const genActuals = gen.filter((g) => !g.isForecast);
   const currentGen = genActuals.length ? genActuals[genActuals.length - 1] : null;
 
-  // Price chart data
-  const priceChartData = prices.map((p) => ({
-    DateTime: p.DateTime,
-    ActualPrice: p.isForecast ? null : p.FinalPrice,
-    ForecastPrice: p.isForecast ? p.FinalPrice : null,
-  }));
+  // Price chart data — bridge the gap between actual and forecast
+  const priceChartData = prices.map((p, i) => {
+    const isLastActual = !p.isForecast && (i + 1 >= prices.length || prices[i + 1].isForecast);
+    return {
+      DateTime: p.DateTime,
+      ActualPrice: p.isForecast ? null : p.FinalPrice,
+      ForecastPrice: p.isForecast ? p.FinalPrice : (isLastActual ? p.FinalPrice : null),
+    };
+  });
 
-  // Generation chart data
-  const genChartData = gen.map((g) => ({
-    DateTime: g.DateTime,
-    ActualMW: g.isForecast ? null : g.TotalMW,
-    ForecastMW: g.isForecast ? g.TotalMW : null,
-  }));
+  // Generation chart data — same bridge
+  const genChartData = gen.map((g, i) => {
+    const isLastActual = !g.isForecast && (i + 1 >= gen.length || gen[i + 1].isForecast);
+    return {
+      DateTime: g.DateTime,
+      ActualMW: g.isForecast ? null : g.TotalMW,
+      ForecastMW: g.isForecast ? g.TotalMW : (isLastActual ? g.TotalMW : null),
+    };
+  });
 
   return (
     <div className="space-y-6">
