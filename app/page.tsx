@@ -285,7 +285,7 @@ function WEMTab({ data }: { data: WEMData | null }) {
   // Split into actuals and forecasts for charting
   const actuals = prices.filter((p) => !p.isForecast);
   const forecasts = prices.filter((p) => p.isForecast);
-  const latestActual = actuals.length ? actuals[actuals.length - 1] : null;
+  const currentPrice = forecasts.length ? forecasts[0] : (actuals.length ? actuals[actuals.length - 1] : null);
   const demand = data?.demand;
 
   // Build chart data: actuals have ActualPrice, forecasts have ForecastPrice
@@ -302,14 +302,11 @@ function WEMTab({ data }: { data: WEMData | null }) {
         <Card className="rounded-xl">
           <CardHeader><CardTitle className="text-base">Current Energy Price (AWST)</CardTitle></CardHeader>
           <CardContent>
-            {latestActual ? (
+            {currentPrice ? (
               <div>
-                <span className="text-3xl font-bold font-mono">{formatCurrency(latestActual.FinalPrice)}</span>
+                <span className="text-3xl font-bold font-mono">{formatCurrency(currentPrice.FinalPrice)}</span>
                 <span className="text-sm text-zinc-500 ml-2">/MWh</span>
-                <p className="text-xs text-zinc-500 mt-1">{latestActual.DateTime.slice(11, 16)} AWST</p>
-                {forecasts.length > 0 && (
-                  <p className="text-xs text-zinc-500 mt-0.5">Next: {formatCurrency(forecasts[0].FinalPrice)} @ {forecasts[0].DateTime.slice(11, 16)}</p>
-                )}
+                <p className="text-xs text-zinc-500 mt-1">{currentPrice.DateTime.slice(11, 16)} AWST{currentPrice.isForecast ? " (forecast)" : ""}</p>
               </div>
             ) : <LoadingState />}
           </CardContent>
