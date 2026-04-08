@@ -163,7 +163,7 @@ const IC_OPTIONS = Object.entries(INTERCONNECTORS).map(([id, ic]) => ({
 
 type Direction = "all" | "increase" | "decrease";
 
-type WEMPrice = { DateTime: string; FinalPrice: number };
+type WEMPrice = { DateTime: string; FinalPrice: number; isForecast: boolean };
 type WEMDemand = { asAt: string; demandMW: number; withdrawalMW: number };
 type WEMOfflineUnit = { facilityCode: string; offlineMW: number };
 type WEMFacilityGen = { facilityCode: string; currentMW: number };
@@ -281,11 +281,19 @@ function deltaColor(delta: number | null | undefined): string {
 // --- WEM Tab ---
 
 function WEMTab({ data }: { data: WEMData | null }) {
-  // Find the latest non-null price (current dispatch interval)
   const prices = data?.prices ?? [];
-  const dispatched = prices.filter((p) => p.FinalPrice !== null);
-  const latestPrice = dispatched.length ? dispatched[dispatched.length - 1] : null;
+  // Split into actuals and forecasts for charting
+  const actuals = prices.filter((p) => !p.isForecast);
+  const forecasts = prices.filter((p) => p.isForecast);
+  const latestActual = actuals.length ? actuals[actuals.length - 1] : null;
   const demand = data?.demand;
+
+  // Build chart data: actuals have ActualPrice, forecasts have ForecastPrice
+  const chartData = prices.map((p) => ({
+    DateTime: p.DateTime,
+    ActualPrice: p.isForecast ? null : p.FinalPrice,
+    ForecastPrice: p.isForecast ? p.FinalPrice : null,
+  }));
 
   return (
     <div className="space-y-6">
@@ -294,11 +302,14 @@ function WEMTab({ data }: { data: WEMData | null }) {
         <Card className="rounded-xl">
           <CardHeader><CardTitle className="text-base">Current Energy Price (AWST)</CardTitle></CardHeader>
           <CardContent>
-            {latestPrice ? (
+            {latestActual ? (
               <div>
-                <span className="text-3xl font-bold font-mono">{formatCurrency(latestPrice.FinalPrice)}</span>
+                <span className="text-3xl font-bold font-mono">{formatCurrency(latestActual.FinalPrice)}</span>
                 <span className="text-sm text-zinc-500 ml-2">/MWh</span>
-                <p className="text-xs text-zinc-500 mt-1">Interval: {latestPrice.DateTime.slice(11, 16)} AWST</p>
+                <p className="text-xs text-zinc-500 mt-1">{latestActual.DateTime.slice(11, 16)} AWST</p>
+                {forecasts.length > 0 && (
+                  <p className="text-xs text-zinc-500 mt-0.5">Next: {formatCurrency(forecasts[0].FinalPrice)} @ {forecasts[0].DateTime.slice(11, 16)}</p>
+                )}
               </div>
             ) : <LoadingState />}
           </CardContent>
@@ -318,14 +329,14 @@ function WEMTab({ data }: { data: WEMData | null }) {
         </Card>
       </div>
 
-      {/* Price chart — only show dispatched intervals (non-null) */}
+      {/* Price chart — actuals (solid) + forecast (dashed) */}
       <Card className="rounded-xl">
-        <CardHeader><CardTitle className="text-base">Energy Price — Today (5-min intervals, AWST)</CardTitle></CardHeader>
+        <CardHeader><CardTitle className="text-base">Energy Price — Today (5-min, AWST)</CardTitle></CardHeader>
         <CardContent>
-          {dispatched.length > 0 ? (
+          {chartData.length > 0 ? (
             <div className="h-[350px]">
               <ResponsiveContainer width="100%" height="100%">
-                <ComposedChart data={dispatched}>
+                <ComposedChart data={chartData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
                   <XAxis
                     dataKey="DateTime"
@@ -339,9 +350,13 @@ function WEMTab({ data }: { data: WEMData | null }) {
                   <Tooltip
                     contentStyle={{ backgroundColor: "#18181b", border: "1px solid #27272a", borderRadius: 8 }}
                     labelFormatter={(v: unknown) => String(v).slice(11, 16) + " AWST"}
-                    formatter={(v: unknown) => [`$${Number(v).toFixed(2)}/MWh`, "Price"]}
+                    formatter={(v: unknown, name: unknown) => [
+                      `$${Number(v).toFixed(2)}/MWh`,
+                      name === "ActualPrice" ? "Actual" : "Forecast",
+                    ]}
                   />
-                  <Area type="monotone" dataKey="FinalPrice" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.1} />
+                  <Area type="monotone" dataKey="ActualPrice" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.1} connectNulls={false} />
+                  <Area type="monotone" dataKey="ForecastPrice" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.05} strokeDasharray="5 3" connectNulls={false} />
                 </ComposedChart>
               </ResponsiveContainer>
             </div>
