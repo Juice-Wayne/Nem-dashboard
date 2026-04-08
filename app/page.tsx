@@ -456,7 +456,7 @@ export default function HomePage() {
   const {
     data: wemData,
     isValidating: isRefreshingWEM,
-  } = useAutoRefresh<WEMData>("/api/wem");
+  } = useAutoRefresh<WEMData>("/api/wem", { refreshInterval: 30_000 });
 
   const lastRefreshedAt = changesRefreshedAt ?? actualsRefreshedAt ?? null;
 
