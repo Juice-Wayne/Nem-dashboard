@@ -165,12 +165,13 @@ type Direction = "all" | "increase" | "decrease";
 
 type WEMPrice = { DateTime: string; FinalPrice: number; isForecast: boolean };
 type WEMDemand = { asAt: string; demandMW: number; withdrawalMW: number };
-type WEMOfflineUnit = { facilityCode: string; offlineMW: number };
 type WEMGeneration = { DateTime: string; TotalMW: number; isForecast: boolean };
+type WEMDispatchChange = { INTERVAL_DATETIME: string; REGIONID: string; CURRENT_RRP: number; PREVIOUS_RRP: number; DELTA: number };
 type WEMData = {
   prices: WEMPrice[] | null;
   demand: WEMDemand | null;
   generation: WEMGeneration[] | null;
+  dispatchChanges: WEMDispatchChange[] | null;
 };
 
 type TabId = "prices" | "demand" | "interconnectors" | "sensitivities" | "actuals" | "spikes" | "startcost" | "market" | "wem";
@@ -283,8 +284,12 @@ function WEMTab({ data }: { data: WEMData | null }) {
   const prices = data?.prices ?? [];
   const actuals = prices.filter((p) => !p.isForecast);
   const forecasts = prices.filter((p) => p.isForecast);
-  // Current interval = last dispatched actual
-  const currentPrice = actuals.length ? actuals[actuals.length - 1] : null;
+  const dispatchChanges = data?.dispatchChanges ?? [];
+  // Current price from dispatch solution (most real-time), fallback to Neopoint
+  const dispatchCurrent = dispatchChanges.length ? dispatchChanges.find((d) => Math.abs(d.DELTA) >= 0) : null;
+  const currentPrice = dispatchCurrent
+    ? { DateTime: dispatchCurrent.INTERVAL_DATETIME, FinalPrice: dispatchCurrent.CURRENT_RRP, isForecast: false }
+    : (actuals.length ? actuals[actuals.length - 1] : null);
   const demand = data?.demand;
   const gen = data?.generation ?? [];
   const genActuals = gen.filter((g) => !g.isForecast);
@@ -406,6 +411,39 @@ function WEMTab({ data }: { data: WEMData | null }) {
           ) : <LoadingState />}
         </CardContent>
       </Card>
+
+      {/* Dispatch price changes (current vs previous run) */}
+      {dispatchChanges.length > 0 && (
+        <Card className="rounded-xl">
+          <CardHeader><CardTitle className="text-base">Dispatch Price Changes (Current vs Previous Run)</CardTitle></CardHeader>
+          <CardContent>
+            <div className="max-h-[400px] overflow-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Interval (AWST)</TableHead>
+                    <TableHead className="text-right">Previous</TableHead>
+                    <TableHead className="text-right">Current</TableHead>
+                    <TableHead className="text-right">Delta</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {[...dispatchChanges].sort((a, b) => a.INTERVAL_DATETIME.localeCompare(b.INTERVAL_DATETIME)).map((r) => (
+                    <TableRow key={r.INTERVAL_DATETIME}>
+                      <TableCell className="font-mono text-xs">{r.INTERVAL_DATETIME.slice(11, 16)}</TableCell>
+                      <TableCell className="text-right font-mono tabular-nums text-sm text-zinc-500">{formatCurrency(r.PREVIOUS_RRP)}</TableCell>
+                      <TableCell className="text-right font-mono tabular-nums text-sm text-zinc-200">{formatCurrency(r.CURRENT_RRP)}</TableCell>
+                      <TableCell className={`text-right font-mono tabular-nums text-sm font-medium ${deltaColor(r.DELTA)}`}>
+                        {r.DELTA > 0 ? "+" : ""}{formatCurrency(r.DELTA)}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

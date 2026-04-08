@@ -6,3 +6,4 @@ export { getWEMOfflineCapacity } from "./capacity";
 export type { WEMOfflineUnit } from "./capacity";
 export { getWEMGeneration } from "./generation";
 export type { WEMGeneration } from "./generation";
+export { getWEMDispatchPriceChanges } from "./dispatch-prices";
