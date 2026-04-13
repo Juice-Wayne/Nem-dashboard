@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useState, useEffect, useMemo, useCallback } from "react";
-import { Copy, Check, RefreshCw, Sun, Moon, Pencil, Save, Plus, X, Thermometer, Wind, Zap, ArrowLeftRight, AlertTriangle, Clock, Filter } from "lucide-react";
+import React, { useState, useEffect, useMemo, useCallback, type FormEvent } from "react";
+import { Copy, Check, RefreshCw, Sun, Moon, Pencil, Save, Plus, X, Thermometer, Wind, Zap, ArrowLeftRight, AlertTriangle, Clock, Filter, Lock } from "lucide-react";
 import useSWR from "swr";
 import { cn } from "@/lib/utils";
 import { useAutoRefresh } from "@/lib/hooks/use-auto-refresh";
@@ -163,18 +163,7 @@ const IC_OPTIONS = Object.entries(INTERCONNECTORS).map(([id, ic]) => ({
 
 type Direction = "all" | "increase" | "decrease";
 
-type WEMPrice = { DateTime: string; FinalPrice: number; isForecast: boolean };
-type WEMDemand = { asAt: string; demandMW: number; withdrawalMW: number };
-type WEMGeneration = { DateTime: string; TotalMW: number; isForecast: boolean };
-type WEMDispatchChange = { INTERVAL_DATETIME: string; REGIONID: string; CURRENT_RRP: number; PREVIOUS_RRP: number; DELTA: number };
-type WEMData = {
-  prices: WEMPrice[] | null;
-  demand: WEMDemand | null;
-  generation: WEMGeneration[] | null;
-  dispatchChanges: WEMDispatchChange[] | null;
-};
-
-type TabId = "prices" | "demand" | "interconnectors" | "sensitivities" | "actuals" | "spikes" | "startcost" | "market" | "wem";
+type TabId = "prices" | "demand" | "interconnectors" | "sensitivities" | "actuals" | "spikes" | "startcost" | "market";
 
 // --- Helpers ---
 
@@ -278,176 +267,6 @@ function deltaColor(delta: number | null | undefined): string {
   return "text-zinc-600";
 }
 
-// --- WEM Tab ---
-
-function WEMTab({ data }: { data: WEMData | null }) {
-  const prices = data?.prices ?? [];
-  const actuals = prices.filter((p) => !p.isForecast);
-  const forecasts = prices.filter((p) => p.isForecast);
-  const dispatchChanges = data?.dispatchChanges ?? [];
-  // Current price from dispatch solution (most real-time), fallback to Neopoint
-  const dispatchCurrent = dispatchChanges.length ? dispatchChanges.find((d) => Math.abs(d.DELTA) >= 0) : null;
-  const currentPrice = dispatchCurrent
-    ? { DateTime: dispatchCurrent.INTERVAL_DATETIME, FinalPrice: dispatchCurrent.CURRENT_RRP, isForecast: false }
-    : (actuals.length ? actuals[actuals.length - 1] : null);
-  const demand = data?.demand;
-  const gen = data?.generation ?? [];
-  const genActuals = gen.filter((g) => !g.isForecast);
-  const currentGen = genActuals.length ? genActuals[genActuals.length - 1] : null;
-
-  // Price chart data — bridge the gap between actual and forecast
-  const priceChartData = prices.map((p, i) => {
-    const isLastActual = !p.isForecast && (i + 1 >= prices.length || prices[i + 1].isForecast);
-    return {
-      DateTime: p.DateTime,
-      ActualPrice: p.isForecast ? null : p.FinalPrice,
-      ForecastPrice: p.isForecast ? p.FinalPrice : (isLastActual ? p.FinalPrice : null),
-    };
-  });
-
-  // Generation chart data — same bridge
-  const genChartData = gen.map((g, i) => {
-    const isLastActual = !g.isForecast && (i + 1 >= gen.length || gen[i + 1].isForecast);
-    return {
-      DateTime: g.DateTime,
-      ActualMW: g.isForecast ? null : g.TotalMW,
-      ForecastMW: g.isForecast ? g.TotalMW : (isLastActual ? g.TotalMW : null),
-    };
-  });
-
-  return (
-    <div className="space-y-6">
-      {/* Summary cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <Card className="rounded-xl">
-          <CardHeader><CardTitle className="text-base">Energy Price</CardTitle></CardHeader>
-          <CardContent>
-            {currentPrice ? (
-              <div>
-                <span className="text-3xl font-bold font-mono">{formatCurrency(currentPrice.FinalPrice)}</span>
-                <span className="text-sm text-zinc-500 ml-2">/MWh</span>
-                <p className="text-xs text-zinc-500 mt-1">{currentPrice.DateTime.slice(11, 16)} AWST</p>
-                {forecasts.length > 0 && (
-                  <p className="text-xs text-zinc-400 mt-0.5">Next: {formatCurrency(forecasts[0].FinalPrice)} @ {forecasts[0].DateTime.slice(11, 16)}</p>
-                )}
-              </div>
-            ) : <LoadingState />}
-          </CardContent>
-        </Card>
-
-        <Card className="rounded-xl">
-          <CardHeader><CardTitle className="text-base">Operational Demand</CardTitle></CardHeader>
-          <CardContent>
-            {demand ? (
-              <div>
-                <span className="text-3xl font-bold font-mono">{Math.round(demand.demandMW).toLocaleString()}</span>
-                <span className="text-sm text-zinc-500 ml-2">MW</span>
-                <p className="text-xs text-zinc-500 mt-1">Behind-the-meter: {Math.abs(Math.round(demand.withdrawalMW)).toLocaleString()} MW</p>
-              </div>
-            ) : <LoadingState />}
-          </CardContent>
-        </Card>
-
-        <Card className="rounded-xl">
-          <CardHeader><CardTitle className="text-base">Total Generation</CardTitle></CardHeader>
-          <CardContent>
-            {currentGen ? (
-              <div>
-                <span className="text-3xl font-bold font-mono">{Math.round(currentGen.TotalMW).toLocaleString()}</span>
-                <span className="text-sm text-zinc-500 ml-2">MW</span>
-                <p className="text-xs text-zinc-500 mt-1">{currentGen.DateTime.slice(11, 16)} AWST</p>
-              </div>
-            ) : <LoadingState />}
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Price chart */}
-      <Card className="rounded-xl">
-        <CardHeader><CardTitle className="text-base">Energy Price — Today (5-min, AWST)</CardTitle></CardHeader>
-        <CardContent>
-          {priceChartData.length > 0 ? (
-            <div className="h-[300px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <ComposedChart data={priceChartData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
-                  <XAxis dataKey="DateTime" tickFormatter={(v: string) => v.slice(11, 16)} tick={{ fill: "#a1a1aa", fontSize: 11 }} />
-                  <YAxis tick={{ fill: "#a1a1aa", fontSize: 11 }} tickFormatter={(v: number) => `$${v}`} />
-                  <Tooltip
-                    contentStyle={{ backgroundColor: "#18181b", border: "1px solid #27272a", borderRadius: 8 }}
-                    labelFormatter={(v: unknown) => String(v).slice(11, 16) + " AWST"}
-                    formatter={(v: unknown, name: unknown) => [`$${Number(v).toFixed(2)}/MWh`, name === "ActualPrice" ? "Actual" : "Forecast"]}
-                  />
-                  <Area type="monotone" dataKey="ActualPrice" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.1} connectNulls={false} />
-                  <Area type="monotone" dataKey="ForecastPrice" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.05} strokeDasharray="5 3" connectNulls={false} />
-                </ComposedChart>
-              </ResponsiveContainer>
-            </div>
-          ) : <LoadingState />}
-        </CardContent>
-      </Card>
-
-      {/* Generation chart */}
-      <Card className="rounded-xl">
-        <CardHeader><CardTitle className="text-base">Total Generation — Today (5-min, AWST)</CardTitle></CardHeader>
-        <CardContent>
-          {genChartData.length > 0 ? (
-            <div className="h-[300px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <ComposedChart data={genChartData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
-                  <XAxis dataKey="DateTime" tickFormatter={(v: string) => v.slice(11, 16)} tick={{ fill: "#a1a1aa", fontSize: 11 }} />
-                  <YAxis tick={{ fill: "#a1a1aa", fontSize: 11 }} tickFormatter={(v: number) => `${v} MW`} />
-                  <Tooltip
-                    contentStyle={{ backgroundColor: "#18181b", border: "1px solid #27272a", borderRadius: 8 }}
-                    labelFormatter={(v: unknown) => String(v).slice(11, 16) + " AWST"}
-                    formatter={(v: unknown, name: unknown) => [`${Math.round(Number(v)).toLocaleString()} MW`, name === "ActualMW" ? "Actual" : "Forecast"]}
-                  />
-                  <Area type="monotone" dataKey="ActualMW" stroke="#10b981" fill="#10b981" fillOpacity={0.1} connectNulls={false} />
-                  <Area type="monotone" dataKey="ForecastMW" stroke="#10b981" fill="#10b981" fillOpacity={0.05} strokeDasharray="5 3" connectNulls={false} />
-                </ComposedChart>
-              </ResponsiveContainer>
-            </div>
-          ) : <LoadingState />}
-        </CardContent>
-      </Card>
-
-      {/* Dispatch price changes (current vs previous run) */}
-      {dispatchChanges.length > 0 && (
-        <Card className="rounded-xl">
-          <CardHeader><CardTitle className="text-base">Dispatch Price Changes (Current vs Previous Run)</CardTitle></CardHeader>
-          <CardContent>
-            <div className="max-h-[400px] overflow-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Interval (AWST)</TableHead>
-                    <TableHead className="text-right">Previous</TableHead>
-                    <TableHead className="text-right">Current</TableHead>
-                    <TableHead className="text-right">Delta</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {[...dispatchChanges].sort((a, b) => a.INTERVAL_DATETIME.localeCompare(b.INTERVAL_DATETIME)).map((r) => (
-                    <TableRow key={r.INTERVAL_DATETIME}>
-                      <TableCell className="font-mono text-xs">{r.INTERVAL_DATETIME.slice(11, 16)}</TableCell>
-                      <TableCell className="text-right font-mono tabular-nums text-sm text-zinc-500">{formatCurrency(r.PREVIOUS_RRP)}</TableCell>
-                      <TableCell className="text-right font-mono tabular-nums text-sm text-zinc-200">{formatCurrency(r.CURRENT_RRP)}</TableCell>
-                      <TableCell className={`text-right font-mono tabular-nums text-sm font-medium ${deltaColor(r.DELTA)}`}>
-                        {r.DELTA > 0 ? "+" : ""}{formatCurrency(r.DELTA)}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-    </div>
-  );
-}
-
 // --- Page ---
 
 export default function HomePage() {
@@ -458,6 +277,8 @@ export default function HomePage() {
   const [copiedReason, setCopiedReason] = useState(false);
   const [selectedRow, setSelectedRow] = useState<SelectedRow | null>(null);
   const [isDark, setIsDark] = useState(true);
+  const [brUnlocked, setBrUnlocked] = useState(false);
+  const [brPassword, setBrPassword] = useState("");
 
   useEffect(() => {
     const stored = localStorage.getItem("theme");
@@ -491,10 +312,6 @@ export default function HomePage() {
     lastRefreshedAt: actualsRefreshedAt,
   } = useAutoRefresh<ActualsData>("/api/pd-vs-actual");
 
-  const {
-    data: wemData,
-    isValidating: isRefreshingWEM,
-  } = useAutoRefresh<WEMData>("/api/wem", { refreshInterval: 30_000 });
 
   const lastRefreshedAt = changesRefreshedAt ?? actualsRefreshedAt ?? null;
 
@@ -567,7 +384,7 @@ export default function HomePage() {
   const clearSelection = () => setSelectedRow(null);
 
   // Determine if we show region or interconnector selector
-  const isAnalyticsTab = activeTab === "spikes" || activeTab === "startcost" || activeTab === "market" || activeTab === "wem";
+  const isAnalyticsTab = activeTab === "spikes" || activeTab === "startcost" || activeTab === "market";
   const showRegionSelector = !isAnalyticsTab && activeTab !== "interconnectors";
   const showInterconnectorSelector = activeTab === "interconnectors";
   const showFilters = !isAnalyticsTab;
@@ -588,7 +405,6 @@ export default function HomePage() {
               <TabsTrigger value="spikes">Spikes</TabsTrigger>
               <TabsTrigger value="startcost">BR Start</TabsTrigger>
               <TabsTrigger value="market">Market</TabsTrigger>
-              <TabsTrigger value="wem">WEM</TabsTrigger>
             </TabsList>
             <button
               onClick={handleManualRefresh}
@@ -767,7 +583,38 @@ export default function HomePage() {
 
         {/* === BR START TAB === */}
         <TabsContent value="startcost">
-          <StartCostTab />
+          {brUnlocked ? (
+            <StartCostTab />
+          ) : (
+            <Card className="rounded-xl max-w-md mx-auto mt-12">
+              <CardHeader className="text-center">
+                <Lock className="mx-auto mb-2 h-8 w-8 text-zinc-500" />
+                <CardTitle className="text-base">This tab is password-protected</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <form
+                  onSubmit={(e: FormEvent) => {
+                    e.preventDefault();
+                    if (brPassword === "power") {
+                      setBrUnlocked(true);
+                    } else {
+                      setBrPassword("");
+                    }
+                  }}
+                  className="flex gap-2"
+                >
+                  <input
+                    type="password"
+                    value={brPassword}
+                    onChange={(e) => setBrPassword(e.target.value)}
+                    placeholder="Enter password"
+                    className="flex-1 rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <Button type="submit" size="sm">Unlock</Button>
+                </form>
+              </CardContent>
+            </Card>
+          )}
         </TabsContent>
 
         {/* === MARKET ANALYSIS TAB === */}
@@ -775,10 +622,6 @@ export default function HomePage() {
           <MarketAnalysisTab />
         </TabsContent>
 
-        {/* === WEM TAB === */}
-        <TabsContent value="wem" className="mt-4">
-          <WEMTab data={wemData ?? null} />
-        </TabsContent>
       </Tabs>
     </div>
   );
