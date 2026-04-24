@@ -333,7 +333,7 @@ function SummaryCard({ text }: { text: string }) {
   return (
     <Card className="bg-zinc-900/60 border-white/5 py-0 gap-0">
       <CardContent className="px-3 py-2 flex items-center gap-3">
-        <span className="text-[10px] uppercase tracking-wide text-zinc-500 whitespace-nowrap">AEMO</span>
+        <span className="text-[10px] uppercase tracking-wide text-zinc-500 whitespace-nowrap">P bid reason</span>
         <div className="flex-1 text-xs font-mono text-zinc-200 select-all truncate">{text}</div>
         <button
           onClick={copy}
@@ -392,7 +392,7 @@ function TimePicker({ value, onChange }: { value: string; onChange: (hhmm24: str
   return (
     <div className="flex gap-1 items-center">
       <Select value={String(h12)} onValueChange={(v) => commit(Number(v), m, ampm)}>
-        <SelectTrigger className={triggerCls}><SelectValue>{pad2(h12)}</SelectValue></SelectTrigger>
+        <SelectTrigger size="sm" className={triggerCls}><SelectValue>{pad2(h12)}</SelectValue></SelectTrigger>
         <SelectContent>
           {Array.from({ length: 12 }, (_, i) => i + 1).map((h) => (
             <SelectItem key={h} value={String(h)}>{pad2(h)}</SelectItem>
@@ -401,7 +401,7 @@ function TimePicker({ value, onChange }: { value: string; onChange: (hhmm24: str
       </Select>
       <span className="text-zinc-500">:</span>
       <Select value={String(m)} onValueChange={(v) => commit(h12, Number(v), ampm)}>
-        <SelectTrigger className={triggerCls}><SelectValue>{pad2(m)}</SelectValue></SelectTrigger>
+        <SelectTrigger size="sm" className={triggerCls}><SelectValue>{pad2(m)}</SelectValue></SelectTrigger>
         <SelectContent>
           {Array.from({ length: 12 }, (_, i) => i * 5).map((mm) => (
             <SelectItem key={mm} value={String(mm)}>{pad2(mm)}</SelectItem>
@@ -409,7 +409,7 @@ function TimePicker({ value, onChange }: { value: string; onChange: (hhmm24: str
         </SelectContent>
       </Select>
       <Select value={ampm} onValueChange={(v) => commit(h12, m, v as "AM" | "PM")}>
-        <SelectTrigger className={triggerCls}><SelectValue>{ampm}</SelectValue></SelectTrigger>
+        <SelectTrigger size="sm" className={triggerCls}><SelectValue>{ampm}</SelectValue></SelectTrigger>
         <SelectContent>
           <SelectItem value="AM">AM</SelectItem>
           <SelectItem value="PM">PM</SelectItem>
