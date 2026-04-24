@@ -17,6 +17,19 @@ const STORAGE_KEY = "nem-offloading-config";
 const INPUT_CLS =
   "bg-zinc-950 border border-zinc-700 rounded h-8 px-2 text-zinc-200 font-mono text-xs w-full outline-none focus:border-zinc-500";
 
+/** Data provenance color coding. Tint backgrounds let you see at a glance where each
+ *  number came from: calculated from inputs (orange), manual input (yellow), or AEMO (blue). */
+const SRC = {
+  CALC:  "bg-orange-500/10",
+  INPUT: "bg-yellow-400/30",   // highlighter-yellow so editable cells are obvious
+  AEMO:  "bg-blue-500/15",
+} as const;
+const HEADER_SRC = {
+  CALC:  "bg-orange-500/25",
+  INPUT: "bg-yellow-400/50",
+  AEMO:  "bg-blue-500/30",
+} as const;
+
 const DEFAULTS: OffloadConfig = {
   startISO: nextHalfHourISO(),
   durationHrs: 4,
@@ -176,6 +189,7 @@ export function OffloadingTab() {
   return (
     <div className="space-y-4">
       <SummaryCard text={summaryText} />
+      <DebugLegend />
 
       <Card className="bg-zinc-900/60 border-white/5">
         <CardContent className="p-3 space-y-2">
@@ -189,7 +203,7 @@ export function OffloadingTab() {
                   const el = e.currentTarget;
                   if (typeof el.showPicker === "function") el.showPicker();
                 }}
-                className={`${INPUT_CLS} [color-scheme:dark] cursor-pointer [&::-webkit-calendar-picker-indicator]:opacity-60 [&::-webkit-calendar-picker-indicator]:hover:opacity-100`}
+                className={`${INPUT_CLS} ${SRC.INPUT} [color-scheme:dark] cursor-pointer [&::-webkit-calendar-picker-indicator]:opacity-60 [&::-webkit-calendar-picker-indicator]:hover:opacity-100`}
               />
             </Field>
             <Field label="Start time" className="md:col-span-2">
@@ -199,16 +213,16 @@ export function OffloadingTab() {
               />
             </Field>
             <Field label="Duration (hrs)" tooltip="Input the total duration in hours of the offloading event.">
-              <NumInput value={config.durationHrs} onChange={(v) => update("durationHrs", v)} min={1} max={99} maxDigits={2} />
+              <NumInput className={SRC.INPUT} value={config.durationHrs} onChange={(v) => update("durationHrs", v)} min={1} max={99} maxDigits={2} />
             </Field>
             <Field label="Total MW reduction" tooltip="Input the total amount of MW needed to offload across the whole event.">
-              <NumInput value={config.mwReduction} onChange={(v) => update("mwReduction", v)} min={0} />
+              <NumInput className={SRC.INPUT} value={config.mwReduction} onChange={(v) => update("mwReduction", v)} min={0} />
             </Field>
             <Field label="LYB1 capacity (MW)">
-              <NumInput value={config.lyb1Cap} onChange={(v) => update("lyb1Cap", v)} min={0} max={999} maxDigits={3} />
+              <NumInput className={SRC.INPUT} value={config.lyb1Cap} onChange={(v) => update("lyb1Cap", v)} min={0} max={999} maxDigits={3} />
             </Field>
             <Field label="LYB2 capacity (MW)">
-              <NumInput value={config.lyb2Cap} onChange={(v) => update("lyb2Cap", v)} min={0} max={999} maxDigits={3} />
+              <NumInput className={SRC.INPUT} value={config.lyb2Cap} onChange={(v) => update("lyb2Cap", v)} min={0} max={999} maxDigits={3} />
             </Field>
           </div>
           <div className="text-[11px] text-zinc-400 flex gap-6">
@@ -224,22 +238,22 @@ export function OffloadingTab() {
             <Table>
               <TableHeader>
                 <TableRow className="border-white/5">
-                  <TableHead className="whitespace-nowrap">HH ending<br/><span className="text-[9px] font-normal text-zinc-500">Market Time</span></TableHead>
-                  <TableHead className="text-right whitespace-nowrap">Target MW<br/><span className="text-[9px] font-normal text-zinc-500">/ hh</span></TableHead>
-                  <TableHead className="text-right whitespace-nowrap">Target<br/><span className="text-[9px] font-normal text-zinc-500">Offload MWh</span></TableHead>
-                  <TableHead className="text-right whitespace-nowrap">Forecast<br/><span className="text-[9px] font-normal text-zinc-500">MW</span></TableHead>
-                  <TableHead className="text-right whitespace-nowrap">Actual<br/><span className="text-[9px] font-normal text-zinc-500">MW</span></TableHead>
-                  <TableHead className="text-right whitespace-nowrap">MW Loss</TableHead>
-                  <TableHead className="text-right whitespace-nowrap">Act Offload<br/><span className="text-[9px] font-normal text-zinc-500">MWh</span></TableHead>
-                  <TableHead className="text-right whitespace-nowrap">Cum MWh<br/><span className="text-[9px] font-normal text-zinc-500">Loss</span></TableHead>
-                  <TableHead className="text-right whitespace-nowrap border-l border-white/10">LYB1<br/><span className="text-[9px] font-normal text-zinc-500">Bid target</span></TableHead>
-                  <TableHead className="text-right whitespace-nowrap">LYB2<br/><span className="text-[9px] font-normal text-zinc-500">Bid target</span></TableHead>
-                  <TableHead className="text-right whitespace-nowrap">Total<br/><span className="text-[9px] font-normal text-zinc-500">bid</span></TableHead>
-                  <TableHead className="text-right whitespace-nowrap border-l border-white/10">LYB1<br/><span className="text-[9px] font-normal text-zinc-500">actual</span></TableHead>
-                  <TableHead className="text-right whitespace-nowrap">Less gas<br/><span className="text-[9px] font-normal text-zinc-500">LYB1</span></TableHead>
-                  <TableHead className="text-right whitespace-nowrap">LYB2<br/><span className="text-[9px] font-normal text-zinc-500">actual</span></TableHead>
-                  <TableHead className="text-right whitespace-nowrap">Less gas<br/><span className="text-[9px] font-normal text-zinc-500">LYB2</span></TableHead>
-                  <TableHead className="text-right whitespace-nowrap">Total<br/><span className="text-[9px] font-normal text-zinc-500">actual</span></TableHead>
+                  <TableHead className={`whitespace-nowrap ${HEADER_SRC.CALC}`}>HH ending<br/><span className="text-[9px] font-normal text-zinc-500">Market Time</span></TableHead>
+                  <TableHead className={`text-right whitespace-nowrap ${HEADER_SRC.CALC}`}>Target MW<br/><span className="text-[9px] font-normal text-zinc-500">/ hh</span></TableHead>
+                  <TableHead className={`text-right whitespace-nowrap ${HEADER_SRC.CALC}`}>Target<br/><span className="text-[9px] font-normal text-zinc-500">Offload MWh</span></TableHead>
+                  <TableHead className={`text-right whitespace-nowrap ${HEADER_SRC.CALC}`}>Forecast<br/><span className="text-[9px] font-normal text-zinc-500">MW</span></TableHead>
+                  <TableHead className={`text-right whitespace-nowrap ${HEADER_SRC.CALC}`}>Actual<br/><span className="text-[9px] font-normal text-zinc-500">MW</span></TableHead>
+                  <TableHead className={`text-right whitespace-nowrap ${HEADER_SRC.CALC}`}>MW Loss</TableHead>
+                  <TableHead className={`text-right whitespace-nowrap ${HEADER_SRC.CALC}`}>Act Offload<br/><span className="text-[9px] font-normal text-zinc-500">MWh</span></TableHead>
+                  <TableHead className={`text-right whitespace-nowrap ${HEADER_SRC.CALC}`}>Cum MWh<br/><span className="text-[9px] font-normal text-zinc-500">Loss</span></TableHead>
+                  <TableHead className={`text-right whitespace-nowrap border-l border-white/10 ${HEADER_SRC.CALC}`}>LYB1<br/><span className="text-[9px] font-normal text-zinc-500">Bid target</span></TableHead>
+                  <TableHead className={`text-right whitespace-nowrap ${HEADER_SRC.CALC}`}>LYB2<br/><span className="text-[9px] font-normal text-zinc-500">Bid target</span></TableHead>
+                  <TableHead className={`text-right whitespace-nowrap ${HEADER_SRC.CALC}`}>Total<br/><span className="text-[9px] font-normal text-zinc-500">bid</span></TableHead>
+                  <TableHead className={`text-right whitespace-nowrap border-l border-white/10 ${HEADER_SRC.AEMO}`}>LYB1<br/><span className="text-[9px] font-normal text-zinc-500">actual</span></TableHead>
+                  <TableHead className={`text-right whitespace-nowrap ${HEADER_SRC.INPUT}`}>Less gas<br/><span className="text-[9px] font-normal text-zinc-500">LYB1</span></TableHead>
+                  <TableHead className={`text-right whitespace-nowrap ${HEADER_SRC.AEMO}`}>LYB2<br/><span className="text-[9px] font-normal text-zinc-500">actual</span></TableHead>
+                  <TableHead className={`text-right whitespace-nowrap ${HEADER_SRC.INPUT}`}>Less gas<br/><span className="text-[9px] font-normal text-zinc-500">LYB2</span></TableHead>
+                  <TableHead className={`text-right whitespace-nowrap ${HEADER_SRC.CALC}`}>Total<br/><span className="text-[9px] font-normal text-zinc-500">actual</span></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -250,21 +264,21 @@ export function OffloadingTab() {
                   const lyb2Display = r.lyb2Actual ?? r.lyb2TargetMW;
                   return (
                     <TableRow key={r.hhEnding} className="border-white/5 font-mono text-xs">
-                      <TableCell className="whitespace-nowrap">{fmtHHLabel(r.hhEnding)}</TableCell>
-                      <TableCell className="text-right">{fmtMW(r.targetOffloadMW)}</TableCell>
-                      <TableCell className="text-right text-zinc-400">{fmtSignedMWh(r.targetCumMWh)}</TableCell>
-                      <TableCell className="text-right">{fmtMW(r.forecastMW)}</TableCell>
-                      <TableCell className={`text-right ${r.totalActualMW == null ? "italic text-zinc-500" : ""}`}>
+                      <TableCell className={`whitespace-nowrap ${SRC.CALC}`}>{fmtHHLabel(r.hhEnding)}</TableCell>
+                      <TableCell className={`text-right ${SRC.CALC}`}>{fmtMW(r.targetOffloadMW)}</TableCell>
+                      <TableCell className={`text-right text-zinc-400 ${SRC.CALC}`}>{fmtSignedMWh(r.targetCumMWh)}</TableCell>
+                      <TableCell className={`text-right ${SRC.CALC}`}>{fmtMW(r.forecastMW)}</TableCell>
+                      <TableCell className={`text-right ${SRC.CALC} ${r.totalActualMW == null ? "italic text-zinc-500" : ""}`}>
                         {fmtMW(r.totalActualMW ?? r.forecastMW)}
                       </TableCell>
-                      <TableCell className="text-right">{fmtMW(r.mwLoss)}</TableCell>
-                      <TableCell className="text-right">{fmtMW(r.mwhThisHH)}</TableCell>
-                      <TableCell className="text-right">{fmtMW(r.cumMWh)}</TableCell>
-                      <TableCell className="text-right border-l border-white/10">{fmtMW(r.lyb1TargetMW)}</TableCell>
-                      <TableCell className="text-right">{fmtMW(r.lyb2TargetMW)}</TableCell>
-                      <TableCell className="text-right">{fmtMW(bidTotal)}</TableCell>
+                      <TableCell className={`text-right ${SRC.CALC}`}>{fmtMW(r.mwLoss)}</TableCell>
+                      <TableCell className={`text-right ${SRC.CALC}`}>{fmtMW(r.mwhThisHH)}</TableCell>
+                      <TableCell className={`text-right ${SRC.CALC}`}>{fmtMW(r.cumMWh)}</TableCell>
+                      <TableCell className={`text-right border-l border-white/10 ${SRC.CALC}`}>{fmtMW(r.lyb1TargetMW)}</TableCell>
+                      <TableCell className={`text-right ${SRC.CALC}`}>{fmtMW(r.lyb2TargetMW)}</TableCell>
+                      <TableCell className={`text-right ${SRC.CALC}`}>{fmtMW(bidTotal)}</TableCell>
                       <EditableCell
-                        className="border-l border-white/10"
+                        className={`border-l border-white/10 ${r.overridden.lyb1Actual ? SRC.INPUT : SRC.AEMO}`}
                         value={lyb1Display}
                         isOverride={r.overridden.lyb1Actual}
                         isFallback={r.lyb1Actual == null}
@@ -273,6 +287,7 @@ export function OffloadingTab() {
                         onPaste={(text) => handlePaste(rowIdx, "lyb1Actual", text)}
                       />
                       <EditableCell
+                        className={SRC.INPUT}
                         value={r.lyb1Gas}
                         isOverride={r.overridden.lyb1Gas}
                         onCommit={(v) => setOverride(r.hhEnding, "lyb1Gas", v)}
@@ -280,6 +295,7 @@ export function OffloadingTab() {
                         onPaste={(text) => handlePaste(rowIdx, "lyb1Gas", text)}
                       />
                       <EditableCell
+                        className={r.overridden.lyb2Actual ? SRC.INPUT : SRC.AEMO}
                         value={lyb2Display}
                         isOverride={r.overridden.lyb2Actual}
                         isFallback={r.lyb2Actual == null}
@@ -288,13 +304,14 @@ export function OffloadingTab() {
                         onPaste={(text) => handlePaste(rowIdx, "lyb2Actual", text)}
                       />
                       <EditableCell
+                        className={SRC.INPUT}
                         value={r.lyb2Gas}
                         isOverride={r.overridden.lyb2Gas}
                         onCommit={(v) => setOverride(r.hhEnding, "lyb2Gas", v)}
                         onRevert={() => setOverride(r.hhEnding, "lyb2Gas", undefined)}
                         onPaste={(text) => handlePaste(rowIdx, "lyb2Gas", text)}
                       />
-                      <TableCell className={`text-right font-medium ${r.totalActualMW == null ? "italic text-zinc-500" : "text-zinc-100"}`}>
+                      <TableCell className={`text-right font-medium ${SRC.CALC} ${r.totalActualMW == null ? "italic text-zinc-500" : "text-zinc-100"}`}>
                         {fmtMW(r.totalActualMW ?? r.forecastMW)}
                       </TableCell>
                     </TableRow>
@@ -320,6 +337,31 @@ export function OffloadingTab() {
           </div>
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+function DebugLegend() {
+  const Row = ({ bg, label, example }: { bg: string; label: string; example: string }) => (
+    <div className="flex items-center gap-2">
+      <span className={`${bg} h-4 w-4 rounded border border-white/10 shrink-0`} />
+      <span className="text-zinc-200 font-medium whitespace-nowrap">{label}</span>
+      <span className="text-zinc-500 text-[10px]">{example}</span>
+    </div>
+  );
+  return (
+    <div className="flex items-center gap-1 px-1 text-[11px]">
+      <span className="text-[10px] uppercase tracking-wide text-zinc-500">Key</span>
+      <div className="relative group">
+        <Info className="h-3 w-3 text-zinc-600 hover:text-zinc-400 cursor-help" />
+        <div className="invisible group-hover:visible opacity-0 group-hover:opacity-100 transition-opacity absolute left-5 top-1/2 -translate-y-1/2 z-20 bg-zinc-900 border border-zinc-700 rounded-md p-3 shadow-xl w-max">
+          <div className="flex flex-col gap-2 text-xs">
+            <Row bg={SRC.INPUT} label="Manual input" example="e.g. Duration, Total MW reduction, LYB capacities, Less gas" />
+            <Row bg={SRC.AEMO} label="From AEMO" example="Actuals pulled from DISPATCHSCADA (LOYYB1, LOYYB2)" />
+            <Row bg={SRC.CALC} label="Calculated" example="Forecast, MW Loss, Cum MWh, Bid targets (derived from inputs)" />
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -391,7 +433,7 @@ function TimePicker({ value, onChange }: { value: string; onChange: (hhmm24: str
     onChange(`${pad2(newH24)}:${pad2(newM)}`);
   };
 
-  const triggerCls = "bg-zinc-950 border border-zinc-700 rounded h-8 px-2 text-zinc-200 font-mono text-xs min-w-0 w-full";
+  const triggerCls = `bg-zinc-950 border border-zinc-700 rounded h-8 px-2 text-zinc-200 font-mono text-xs min-w-0 w-full ${SRC.INPUT}`;
 
   return (
     <div className="flex gap-1 items-center">
@@ -424,13 +466,14 @@ function TimePicker({ value, onChange }: { value: string; onChange: (hhmm24: str
 }
 
 function NumInput({
-  value, onChange, min, max, maxDigits,
+  value, onChange, min, max, maxDigits, className,
 }: {
   value: number;
   onChange: (v: number) => void;
   min?: number;
   max?: number;
   maxDigits?: number;
+  className?: string;
 }) {
   const [local, setLocal] = useState<string>(String(value));
 
@@ -462,7 +505,7 @@ function NumInput({
       onBlur={handleBlur}
       min={min}
       max={max}
-      className={INPUT_CLS}
+      className={`${INPUT_CLS}${className ? ` ${className}` : ""}`}
     />
   );
 }
