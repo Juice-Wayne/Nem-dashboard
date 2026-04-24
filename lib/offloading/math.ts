@@ -25,6 +25,7 @@ export interface ScheduleRow {
 
 /** Per-HH user overrides. All fields optional — undefined means "use AEMO / default". */
 export interface RowOverrides {
+  forecastMW?: number;   // override the derived forecast (bid target sum) with an AEMO forecast or manual value
   lyb1Actual?: number;
   lyb2Actual?: number;
   lyb1Gas?: number;
@@ -48,6 +49,7 @@ export interface ComputedRow extends ScheduleRow {
   /** Running sum of mwhThisHH through this row. */
   cumMWh: number;
   overridden: {
+    forecastMW: boolean;
     lyb1Actual: boolean;
     lyb2Actual: boolean;
     lyb1Gas: boolean;
@@ -118,6 +120,7 @@ export function applyActuals(
     const lyb2Actual = ov.lyb2Actual ?? aemo?.lyb2 ?? null;
     const lyb1Gas = ov.lyb1Gas ?? 0;
     const lyb2Gas = ov.lyb2Gas ?? 0;
+    const effectiveForecast = ov.forecastMW ?? row.forecastMW;
 
     // Total available only when both units have an actual reading.
     const totalActualMW =
@@ -126,13 +129,14 @@ export function applyActuals(
         : null;
 
     // Fall back to forecast so cumulative MWh projects forward before AEMO data arrives.
-    const basisMW = totalActualMW ?? row.forecastMW;
+    const basisMW = totalActualMW ?? effectiveForecast;
     const mwLoss = cap - basisMW;
     const mwhThisHH = mwLoss / 2;
     cumMWh += mwhThisHH;
 
     result.push({
       ...row,
+      forecastMW: effectiveForecast,
       lyb1Actual,
       lyb2Actual,
       lyb1Gas,
@@ -142,6 +146,7 @@ export function applyActuals(
       mwhThisHH,
       cumMWh,
       overridden: {
+        forecastMW: ov.forecastMW !== undefined,
         lyb1Actual: ov.lyb1Actual !== undefined,
         lyb2Actual: ov.lyb2Actual !== undefined,
         lyb1Gas: ov.lyb1Gas !== undefined,

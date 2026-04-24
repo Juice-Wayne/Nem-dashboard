@@ -26,8 +26,8 @@ const DEFAULTS: OffloadConfig = {
 };
 
 // Editable per-row fields users can override or paste-fill.
-type OverrideField = "lyb1Actual" | "lyb2Actual" | "lyb1Gas" | "lyb2Gas";
-const OVERRIDE_FIELDS: OverrideField[] = ["lyb1Actual", "lyb1Gas", "lyb2Actual", "lyb2Gas"];
+type OverrideField = "forecastMW" | "lyb1Actual" | "lyb2Actual" | "lyb1Gas" | "lyb2Gas";
+const OVERRIDE_FIELDS: OverrideField[] = ["forecastMW", "lyb1Actual", "lyb1Gas", "lyb2Actual", "lyb2Gas"];
 
 function nextHalfHourISO(): string {
   const now = new Date();
@@ -185,7 +185,11 @@ export function OffloadingTab() {
                 type="date"
                 value={toDateInput(config.startISO)}
                 onChange={(e) => update("startISO", withDate(config.startISO, e.target.value))}
-                className={INPUT_CLS}
+                onClick={(e) => {
+                  const el = e.currentTarget;
+                  if (typeof el.showPicker === "function") el.showPicker();
+                }}
+                className={`${INPUT_CLS} [color-scheme:dark] cursor-pointer [&::-webkit-calendar-picker-indicator]:opacity-60 [&::-webkit-calendar-picker-indicator]:hover:opacity-100`}
               />
             </Field>
             <Field label="Start time" className="md:col-span-2">
@@ -249,7 +253,13 @@ export function OffloadingTab() {
                       <TableCell className="whitespace-nowrap">{fmtHHLabel(r.hhEnding)}</TableCell>
                       <TableCell className="text-right">{fmtMW(r.targetOffloadMW)}</TableCell>
                       <TableCell className="text-right text-zinc-400">{fmtSignedMWh(r.targetCumMWh)}</TableCell>
-                      <TableCell className="text-right">{fmtMW(r.forecastMW)}</TableCell>
+                      <EditableCell
+                        value={r.forecastMW}
+                        isOverride={r.overridden.forecastMW}
+                        onCommit={(v) => setOverride(r.hhEnding, "forecastMW", v)}
+                        onRevert={() => setOverride(r.hhEnding, "forecastMW", undefined)}
+                        onPaste={(text) => handlePaste(rowIdx, "forecastMW", text)}
+                      />
                       <TableCell className={`text-right ${r.totalActualMW == null ? "italic text-zinc-500" : ""}`}>
                         {fmtMW(r.totalActualMW ?? r.forecastMW)}
                       </TableCell>
