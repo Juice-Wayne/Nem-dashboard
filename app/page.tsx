@@ -6,6 +6,8 @@ import useSWR from "swr";
 import { cn } from "@/lib/utils";
 import { useAutoRefresh } from "@/lib/hooks/use-auto-refresh";
 import { NemIntervalBar } from "@/components/nem-interval-bar";
+import { RevenueTab } from "@/components/revenue-tab";
+import { SideNav, SIDE_NAV_COLLAPSED_WIDTH, type NavTabId } from "@/components/side-nav";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   XAxis, YAxis, Tooltip, ResponsiveContainer,
@@ -28,7 +30,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { formatCurrency, formatMW, formatMWDelta } from "@/lib/format";
 import { INTERCONNECTORS, getInterconnectorName } from "@/lib/regions";
 
@@ -163,7 +165,14 @@ const IC_OPTIONS = Object.entries(INTERCONNECTORS).map(([id, ic]) => ({
 
 type Direction = "all" | "increase" | "decrease";
 
-type TabId = "prices" | "demand" | "interconnectors" | "sensitivities" | "actuals" | "spikes" | "startcost" | "market";
+type TabId =
+  | "prices" | "demand" | "interconnectors" | "sensitivities" | "actuals"
+  | "market-nem" | "market-wem"
+  | "spikes" | "startcost" | "braemar" | "bdl";
+
+const REBIDS_TABS: ReadonlyArray<TabId> = ["prices", "demand", "interconnectors", "sensitivities", "actuals"];
+
+function isRebidTab(t: TabId): boolean { return REBIDS_TABS.includes(t); }
 
 // --- Helpers ---
 
@@ -269,6 +278,37 @@ function deltaColor(delta: number | null | undefined): string {
 
 // --- Page ---
 
+function PowerGate({ onUnlock }: { onUnlock: () => void }) {
+  const [password, setPassword] = useState("");
+  return (
+    <Card className="rounded-xl max-w-md mx-auto mt-12">
+      <CardHeader className="text-center">
+        <Lock className="mx-auto mb-2 h-8 w-8 text-zinc-500" />
+        <CardTitle className="text-base">This tab is password-protected</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <form
+          onSubmit={(e: FormEvent) => {
+            e.preventDefault();
+            if (password === "power") onUnlock();
+            else setPassword("");
+          }}
+          className="flex gap-2"
+        >
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="Enter password"
+            className="flex-1 rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+          <Button type="submit" size="sm">Unlock</Button>
+        </form>
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function HomePage() {
   const [activeTab, setActiveTab] = useState<TabId>("prices");
   const [region, setRegion] = useState<string>("QLD1");
@@ -277,8 +317,22 @@ export default function HomePage() {
   const [copiedReason, setCopiedReason] = useState(false);
   const [selectedRow, setSelectedRow] = useState<SelectedRow | null>(null);
   const [isDark, setIsDark] = useState(true);
-  const [brUnlocked, setBrUnlocked] = useState(false);
-  const [brPassword, setBrPassword] = useState("");
+  // Single unlock gate for sensitive tabs (BR Start + Revenue). Password: "power".
+  const [powerUnlocked, setPowerUnlocked] = useState(false);
+
+  // VPN gate — on localhost the middleware lets requests through, but we call
+  // /api/vpn-status to verify the VPN adapter is actually connected.
+  const [vpnChecked, setVpnChecked] = useState(false);
+  const [vpnOk, setVpnOk] = useState(true);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const isLocal = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+    if (!isLocal) { setVpnChecked(true); return; } // Vercel — middleware handles it
+    fetch("/api/vpn-status")
+      .then((r) => { setVpnOk(r.ok); setVpnChecked(true); })
+      .catch(() => { setVpnOk(false); setVpnChecked(true); });
+  }, []);
 
   useEffect(() => {
     const stored = localStorage.getItem("theme");
@@ -383,137 +437,151 @@ export default function HomePage() {
 
   const clearSelection = () => setSelectedRow(null);
 
-  // Determine if we show region or interconnector selector
-  const isAnalyticsTab = activeTab === "spikes" || activeTab === "startcost" || activeTab === "market";
-  const showRegionSelector = !isAnalyticsTab && activeTab !== "interconnectors";
-  const showInterconnectorSelector = activeTab === "interconnectors";
-  const showFilters = !isAnalyticsTab;
+  // Filters (region / interconnector / direction / rebid reason) only apply to Rebids tabs.
+  const showFilters = isRebidTab(activeTab);
+  const showRegionSelector = showFilters && activeTab !== "interconnectors";
+  const showInterconnectorSelector = showFilters && activeTab === "interconnectors";
 
+
+
+  if (!vpnChecked) {
+    return (
+      <div className="flex items-center justify-center h-screen bg-zinc-950 text-zinc-500 text-sm">
+        Checking VPN…
+      </div>
+    );
+  }
+
+  if (!vpnOk) {
+    return (
+      <div className="flex items-center justify-center h-screen bg-zinc-950">
+        <div className="text-center">
+          <h1 className="text-zinc-100 text-xl font-semibold mb-2">Network Required</h1>
+          <p className="text-zinc-500 text-sm">Connect from the office or with the company VPN, then refresh.</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="space-y-6 mt-1">
-      {/* Tabs */}
-      <Tabs value={activeTab} onValueChange={handleTabChange}>
-        <div className="relative flex items-center justify-between flex-wrap gap-3">
-          <div className="flex items-center gap-1">
-            <TabsList>
-              <TabsTrigger value="prices">Prices</TabsTrigger>
-              <TabsTrigger value="demand">Demand</TabsTrigger>
-              <TabsTrigger value="interconnectors">Interconnectors</TabsTrigger>
-              <TabsTrigger value="sensitivities">Sensitivities</TabsTrigger>
-              <TabsTrigger value="actuals">Actuals vs 5PD</TabsTrigger>
-              <TabsTrigger value="spikes">Spikes</TabsTrigger>
-              <TabsTrigger value="startcost">BR Start</TabsTrigger>
-              <TabsTrigger value="market">Market</TabsTrigger>
-            </TabsList>
-            <button
-              onClick={handleManualRefresh}
-              disabled={isRefreshing}
-              title={
-                lastRefreshedAt
-                  ? `Last updated: ${lastRefreshedAt.toLocaleTimeString("en-AU", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false, timeZone: "Australia/Brisbane", timeZoneName: "short" })}`
-                  : "Refresh data"
-              }
-              className={cn(
-                "flex items-center justify-center h-8 w-8 rounded-lg transition-all duration-150",
-                "text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.04]",
-                isRefreshing && "text-zinc-400",
-              )}
-            >
-              <RefreshCw className={cn("h-4 w-4", isRefreshing && "animate-spin")} />
-            </button>
-          </div>
+    <div className="min-h-screen">
+      <SideNav
+        activeTab={activeTab as NavTabId}
+        onTabChange={(id) => handleTabChange(id)}
+        powerUnlocked={powerUnlocked}
+      />
 
-          {/* NEM Interval countdown + current prices — absolutely centered on lg, below tabs on md */}
-          <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-auto z-10 hidden lg:block">
-            <NemIntervalBar
-              regionPrices={regionPrices}
-              lastRefreshedAt={lastRefreshedAt}
-            />
-          </div>
+      {/* Main content is offset by the collapsed sidebar width; expansion overlays it. */}
+      <div style={{ marginLeft: SIDE_NAV_COLLAPSED_WIDTH }} className="min-h-screen flex flex-col">
+        <Tabs value={activeTab} onValueChange={handleTabChange} className="flex-1 flex flex-col">
+          {/* Top bar: refresh | NEM interval | filters | theme */}
+          <div className="sticky top-0 z-10 bg-zinc-950/80 backdrop-blur border-b border-white/[0.05]">
+            <div className="flex items-center justify-between flex-wrap gap-3 px-4 py-2">
+              {/* Left spacer — keeps NEM bar centred via justify-between */}
+              <div className="w-8 shrink-0" />
 
-          {/* Filters */}
-          <div className="flex items-center gap-2">
-            {showFilters && showRegionSelector && (
-              <Select value={region} onValueChange={(v) => { setRegion(v); setSelectedRow(null); }}>
-                <SelectTrigger className="w-24 h-8 text-xs">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {REGIONS.map((r) => (
-                    <SelectItem key={r.id} value={r.id}>{r.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-            {showFilters && showInterconnectorSelector && (
-              <Select value={interconnector} onValueChange={(v) => { setInterconnector(v); setSelectedRow(null); }}>
-                <SelectTrigger className="w-36 h-8 text-xs">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All</SelectItem>
-                  {IC_OPTIONS.map((ic) => (
-                    <SelectItem key={ic.id} value={ic.id}>{ic.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-            {showFilters && activeTab !== "actuals" && (
-              <Select value={direction} onValueChange={(v) => { setDirection(v as Direction); setSelectedRow(null); }}>
-                <SelectTrigger className="w-28 h-8 text-xs">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All</SelectItem>
-                  <SelectItem value="increase">Increase</SelectItem>
-                  <SelectItem value="decrease">Decrease</SelectItem>
-                </SelectContent>
-              </Select>
-            )}
-            {showFilters && selectedRow && (
-              <button
-                onClick={clearSelection}
-                className="px-2 py-1 text-xs rounded-md font-medium text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.04] transition-colors"
-              >
-                Clear
-              </button>
-            )}
-            <div className="ml-2 flex items-center gap-1">
-              <button
-                onClick={toggleTheme}
-                title={isDark ? "Switch to light mode" : "Switch to dark mode"}
-                className="flex items-center justify-center h-8 w-8 rounded-lg text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.04] transition-all duration-150"
-              >
-                {isDark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-              </button>
+              <div className="hidden lg:block">
+                <NemIntervalBar regionPrices={regionPrices} lastRefreshedAt={lastRefreshedAt} />
+              </div>
+
+              <div className="flex items-center gap-2">
+                {showFilters && showRegionSelector && (
+                  <Select value={region} onValueChange={(v) => { setRegion(v); setSelectedRow(null); }}>
+                    <SelectTrigger className="w-24 h-8 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {REGIONS.map((r) => (
+                        <SelectItem key={r.id} value={r.id}>{r.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+                {showFilters && showInterconnectorSelector && (
+                  <Select value={interconnector} onValueChange={(v) => { setInterconnector(v); setSelectedRow(null); }}>
+                    <SelectTrigger className="w-36 h-8 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All</SelectItem>
+                      {IC_OPTIONS.map((ic) => (
+                        <SelectItem key={ic.id} value={ic.id}>{ic.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+                {showFilters && activeTab !== "actuals" && (
+                  <Select value={direction} onValueChange={(v) => { setDirection(v as Direction); setSelectedRow(null); }}>
+                    <SelectTrigger className="w-28 h-8 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All</SelectItem>
+                      <SelectItem value="increase">Increase</SelectItem>
+                      <SelectItem value="decrease">Decrease</SelectItem>
+                    </SelectContent>
+                  </Select>
+                )}
+                {showFilters && selectedRow && (
+                  <button
+                    onClick={clearSelection}
+                    className="px-2 py-1 text-xs rounded-md font-medium text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.04] transition-colors"
+                  >
+                    Clear
+                  </button>
+                )}
+                <button
+                  onClick={handleManualRefresh}
+                  disabled={isRefreshing}
+                  title={
+                    lastRefreshedAt
+                      ? `Last updated: ${lastRefreshedAt.toLocaleTimeString("en-AU", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false, timeZone: "Australia/Brisbane", timeZoneName: "short" })}`
+                      : "Refresh data"
+                  }
+                  className={cn(
+                    "flex items-center justify-center h-8 w-8 rounded-lg transition-all duration-150",
+                    "text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.04]",
+                    isRefreshing && "text-zinc-400",
+                  )}
+                >
+                  <RefreshCw className={cn("h-4 w-4", isRefreshing && "animate-spin")} />
+                </button>
+                <button
+                  onClick={toggleTheme}
+                  title={isDark ? "Switch to light mode" : "Switch to dark mode"}
+                  className="flex items-center justify-center h-8 w-8 rounded-lg text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.04] transition-all duration-150"
+                >
+                  {isDark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+                </button>
+              </div>
+            </div>
+
+            {/* NEM Interval bar — mobile/tablet (below lg) */}
+            <div className="lg:hidden px-4 pb-2">
+              <NemIntervalBar regionPrices={regionPrices} lastRefreshedAt={lastRefreshedAt} />
             </div>
           </div>
-        </div>
 
-        {/* NEM Interval bar — mobile/tablet (below lg) */}
-        <div className="lg:hidden mt-3">
-          <NemIntervalBar
-            regionPrices={regionPrices}
-            lastRefreshedAt={lastRefreshedAt}
-          />
-        </div>
+          {/* Rebid Reason Generator */}
+          {showFilters && (
+            <div className="px-4 pt-4">
+              <Card className="rounded-xl">
+                <CardContent className="py-3">
+                  <div className="relative">
+                    <div className="rounded-md border border-input bg-white/[0.03] p-3 pr-12 text-sm font-mono text-zinc-200 min-h-[60px] whitespace-pre-wrap break-words">
+                      {generatedReason}
+                    </div>
+                    <Button variant="ghost" size="icon-sm" className="absolute top-2 right-2" onClick={handleCopyReason}>
+                      {copiedReason ? <Check className="h-4 w-4 text-emerald-400" /> : <Copy className="h-4 w-4" />}
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          )}
 
-        {/* Rebid Reason Generator */}
-        {showFilters && (
-          <Card className="rounded-xl mt-4">
-            <CardContent className="py-3">
-              <div className="relative">
-                <div className="rounded-md border border-input bg-white/[0.03] p-3 pr-12 text-sm font-mono text-zinc-200 min-h-[60px] whitespace-pre-wrap break-words">
-                  {generatedReason}
-                </div>
-                <Button variant="ghost" size="icon-sm" className="absolute top-2 right-2" onClick={handleCopyReason}>
-                  {copiedReason ? <Check className="h-4 w-4 text-emerald-400" /> : <Copy className="h-4 w-4" />}
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        )}
+          <div className="flex-1 min-w-0 px-4 pb-6 pt-4">
+            {/* tab panels follow */}
 
         {/* === PRICES TAB === */}
         <TabsContent value="prices">
@@ -581,48 +649,30 @@ export default function HomePage() {
           <SpikesTab />
         </TabsContent>
 
-        {/* === BR START TAB === */}
+        {/* === BRAEMAR START TAB (password-gated) === */}
         <TabsContent value="startcost">
-          {brUnlocked ? (
-            <StartCostTab />
-          ) : (
-            <Card className="rounded-xl max-w-md mx-auto mt-12">
-              <CardHeader className="text-center">
-                <Lock className="mx-auto mb-2 h-8 w-8 text-zinc-500" />
-                <CardTitle className="text-base">This tab is password-protected</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <form
-                  onSubmit={(e: FormEvent) => {
-                    e.preventDefault();
-                    if (brPassword === "power") {
-                      setBrUnlocked(true);
-                    } else {
-                      setBrPassword("");
-                    }
-                  }}
-                  className="flex gap-2"
-                >
-                  <input
-                    type="password"
-                    value={brPassword}
-                    onChange={(e) => setBrPassword(e.target.value)}
-                    placeholder="Enter password"
-                    className="flex-1 rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                  <Button type="submit" size="sm">Unlock</Button>
-                </form>
-              </CardContent>
-            </Card>
-          )}
+          {powerUnlocked ? <StartCostTab /> : <PowerGate onUnlock={() => setPowerUnlocked(true)} />}
         </TabsContent>
 
-        {/* === MARKET ANALYSIS TAB === */}
-        <TabsContent value="market" className="mt-4">
-          <MarketAnalysisTab />
+        {/* === MARKET ANALYSIS TABS === */}
+        <TabsContent value="market-nem" className="mt-4">
+          <MarketAnalysisTab market="nem" />
+        </TabsContent>
+        <TabsContent value="market-wem" className="mt-4">
+          <MarketAnalysisTab market="wem" />
         </TabsContent>
 
-      </Tabs>
+        {/* === REVENUE TABS (password-gated) === */}
+        <TabsContent value="braemar" className="mt-4">
+          {powerUnlocked ? <RevenueTab plant="braemar" /> : <PowerGate onUnlock={() => setPowerUnlocked(true)} />}
+        </TabsContent>
+        <TabsContent value="bdl" className="mt-4">
+          {powerUnlocked ? <RevenueTab plant="bdl" /> : <PowerGate onUnlock={() => setPowerUnlocked(true)} />}
+        </TabsContent>
+
+          </div>
+        </Tabs>
+      </div>
     </div>
   );
 }
@@ -1442,8 +1492,7 @@ const SEVERITY_STYLES: Record<string, { bg: string; text: string; label: string 
 };
 
 const LOOKBACK_OPTIONS = [
-  { hours: 24, label: "24h" },
-  { hours: 72, label: "3d" },
+  { hours: 24, label: "1d" },
   { hours: 168, label: "7d" },
 ] as const;
 
@@ -1823,7 +1872,6 @@ function StartCostTab() {
             <ConfigInput label="Gas" unit="$/GJ" value={gasCostGJ} onChange={setGasCostGJ} />
             <ConfigInput label="Heat Rate" unit="GJ/MWh" value={heatRate} onChange={setHeatRate} />
             <ConfigInput label="Load" unit="MW" value={loadMW} onChange={setLoadMW} />
-            <ConfigInput label="Start Cost" unit="$" value={startCost} onChange={setStartCost} />
             <ConfigInput label="Ramp Rate" unit="MW/min" value={rampRate} onChange={setRampRate} />
             <div className="flex items-center gap-1.5">
               <span className="text-[10px] text-zinc-500">SRMC:</span>
@@ -2171,6 +2219,590 @@ function icDirectionLabel(name: string, direction: string): string {
 
 type MarketTextStyle = "compact" | "dot-point" | "narrative" | "table";
 
+// --- WEM Market types ---
+
+interface WEMOutageUI { facilityCode: string; name: string; offlineMW: number; maxCapacity: number; availableMW: number; fuelType: string; type: "full" | "limited"; expectedReturn: string | null }
+interface WEMUpcomingOutageUI { facilityCode: string; name: string; maxCapacity: number; fuelType: string; outageStart: string; expectedReturn: string | null }
+interface WEMFacilityOutputUI { facilityCode: string; name: string; mw: number; fuelType: string }
+interface WEMGenerationMixUI {
+  coal: number; gas: number; wind: number; solar: number;
+  battery: number; distillate: number; biomass: number; other: number;
+  total: number; facilities: WEMFacilityOutputUI[];
+}
+interface WEMMarketData {
+  timestamp: string;
+  temp: { today: number | null; tomorrow: number | null };
+  demand: { currentMW: number; withdrawalMW: number; asAt: string } | null;
+  generation: WEMGenerationMixUI | null;
+  outages: WEMOutageUI[];
+  upcomingOutages: WEMUpcomingOutageUI[];
+}
+
+// WEM manual overrides stored in localStorage
+interface WEMManualData {
+  date: string;
+  weather: string;      // "30 degrees and sunny"
+  demandOutlook: string; // "Demand expected to drop tomorrow"
+  windOutlook: string;   // "Low wind, picking up evening peak"
+  notes: string;         // Unit runs, RCT testing, etc.
+}
+
+const WEM_MANUAL_KEY = "wem-market-manual";
+
+function loadWEMManualData(): WEMManualData {
+  try {
+    const raw = localStorage.getItem(WEM_MANUAL_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as WEMManualData;
+      if (parsed.date === getToday()) return parsed;
+    }
+  } catch { /* ignore */ }
+  return { date: getToday(), weather: "", demandOutlook: "", windOutlook: "", notes: "" };
+}
+
+function saveWEMManualData(data: WEMManualData) {
+  localStorage.setItem(WEM_MANUAL_KEY, JSON.stringify({ ...data, date: getToday() }));
+}
+
+function buildWEMMarketText(wem: WEMMarketData, manual: WEMManualData, style: MarketTextStyle = "compact"): string {
+  const dateStr = new Date().toLocaleDateString("en-AU", {
+    timeZone: "Australia/Perth", weekday: "short", day: "numeric", month: "short", year: "numeric",
+  });
+
+  const gen = wem.generation;
+  const demand = wem.demand;
+  const temp = wem.temp;
+
+  const thermalOutages = wem.outages.filter((o) => o.fuelType === "coal" || o.fuelType === "gas");
+
+  if (style === "compact") {
+    const lines: string[] = [`**WEM Market Update — ${dateStr}**`, ""];
+    const tempStr = manual.weather || (temp.today != null ? `${temp.today}°C` : "-");
+    lines.push(`**Temp / Demand**`);
+    lines.push(`Perth: ${tempStr}`);
+    if (demand) lines.push(`Demand: ${Math.round(demand.currentMW).toLocaleString()} MW`);
+    if (manual.demandOutlook) lines.push(manual.demandOutlook);
+    // Wind
+    if (gen) {
+      lines.push("", `**Wind**`);
+      lines.push(`Currently ${gen.wind.toLocaleString()} MW`);
+      if (manual.windOutlook) lines.push(manual.windOutlook);
+    }
+    // Solar
+    if (gen && gen.solar > 0) {
+      lines.push(`Solar: ${gen.solar.toLocaleString()} MW`);
+    }
+    // Generation mix
+    if (gen) {
+      lines.push("", `**Generation**`);
+      if (gen.coal > 0) lines.push(`Coal: ${gen.coal.toLocaleString()} MW`);
+      if (gen.gas > 0) lines.push(`Gas: ${gen.gas.toLocaleString()} MW`);
+      if (gen.wind > 0) lines.push(`Wind: ${gen.wind.toLocaleString()} MW`);
+      if (gen.solar > 0) lines.push(`Solar: ${gen.solar.toLocaleString()} MW`);
+      if (gen.battery > 0) lines.push(`Battery: ${gen.battery.toLocaleString()} MW`);
+    }
+    // Outages
+    const fullOutages = thermalOutages.filter((o) => o.type === "full");
+    const limitedOutages = thermalOutages.filter((o) => o.type === "limited");
+    if (fullOutages.length > 0) {
+      lines.push("", `**Outages**`);
+      for (const o of fullOutages) {
+        const ret = o.expectedReturn ? ` till ${new Date(o.expectedReturn).toLocaleDateString("en-AU", { timeZone: "Australia/Perth", day: "numeric", month: "short" })}` : "";
+        lines.push(`${o.name}: offline${ret}`);
+      }
+    }
+    if (limitedOutages.length > 0) {
+      lines.push("", `**Limited**`);
+      for (const o of limitedOutages) {
+        const ret = o.expectedReturn ? ` till ${new Date(o.expectedReturn).toLocaleDateString("en-AU", { timeZone: "Australia/Perth", day: "numeric", month: "short" })}` : "";
+        lines.push(`${o.name}: limited ${o.availableMW}/${o.maxCapacity} MW${ret}`);
+      }
+    }
+    // Upcoming
+    if (wem.upcomingOutages?.length > 0) {
+      lines.push("", `**Upcoming Outages**`);
+      for (const o of wem.upcomingOutages) {
+        const start = new Date(o.outageStart).toLocaleDateString("en-AU", { timeZone: "Australia/Perth", day: "numeric", month: "short" });
+        const end = o.expectedReturn ? ` to ${new Date(o.expectedReturn).toLocaleDateString("en-AU", { timeZone: "Australia/Perth", day: "numeric", month: "short" })}` : "";
+        lines.push(`${o.name}: from ${start}${end}`);
+      }
+    }
+    // Manual notes
+    if (manual.notes) lines.push("", `**Notes**`, manual.notes);
+    return lines.join("\n");
+  }
+
+  if (style === "dot-point") {
+    const lines: string[] = [`**WEM Market Update — ${dateStr}**`];
+    const tempStr = manual.weather || (temp.today != null ? `${temp.today}°C` : "-");
+    lines.push("", `**Temp / Demand**`);
+    lines.push(`  - Perth: ${tempStr}`);
+    if (demand) lines.push(`  - Demand: ${Math.round(demand.currentMW).toLocaleString()} MW`);
+    if (manual.demandOutlook) lines.push(`  - ${manual.demandOutlook}`);
+    if (gen) {
+      lines.push("", `**Renewables**`);
+      lines.push(`  - Wind: ${gen.wind.toLocaleString()} MW`);
+      if (gen.solar > 0) lines.push(`  - Solar: ${gen.solar.toLocaleString()} MW`);
+      if (manual.windOutlook) lines.push(`  - ${manual.windOutlook}`);
+    }
+    if (thermalOutages.length > 0) {
+      lines.push("", `**Outages**`);
+      for (const o of thermalOutages) {
+        const ret = o.expectedReturn ? ` till ${new Date(o.expectedReturn).toLocaleDateString("en-AU", { timeZone: "Australia/Perth", day: "numeric", month: "short" })}` : "";
+        lines.push(`  - ${o.name}: ${o.offlineMW} MW offline${ret}`);
+      }
+    }
+    if (manual.notes) lines.push("", `**Notes**`, `  - ${manual.notes}`);
+    return lines.join("\n");
+  }
+
+  if (style === "narrative") {
+    const lines: string[] = [`**WEM Market Update — ${dateStr}**`, ""];
+    const tempStr = manual.weather || (temp.today != null ? `Perth is forecast to reach ${temp.today}°C today` : "");
+    if (tempStr) lines.push(tempStr + ".");
+    if (demand) {
+      lines.push(`Operational demand is currently ${Math.round(demand.currentMW).toLocaleString()} MW.`);
+    }
+    if (manual.demandOutlook) lines.push(manual.demandOutlook);
+    lines.push("");
+    if (gen) {
+      const parts: string[] = [];
+      if (gen.wind > 0) parts.push(`wind at ${gen.wind.toLocaleString()} MW`);
+      if (gen.solar > 0) parts.push(`solar at ${gen.solar.toLocaleString()} MW`);
+      if (parts.length > 0) lines.push(`Renewables: ${parts.join(", ")}.`);
+      if (manual.windOutlook) lines.push(manual.windOutlook);
+    }
+    if (thermalOutages.length > 0) {
+      const oList = thermalOutages.map((o) => {
+        const ret = o.expectedReturn ? `, returning ${new Date(o.expectedReturn).toLocaleDateString("en-AU", { timeZone: "Australia/Perth", day: "numeric", month: "short" })}` : "";
+        return `${o.name} (${o.offlineMW} MW${ret})`;
+      }).join(", ");
+      lines.push("", `Current thermal outages: ${oList}.`);
+    }
+    if (manual.notes) lines.push("", manual.notes);
+    return lines.join("\n");
+  }
+
+  // Table style
+  {
+    const pad = (s: string, w: number) => s + " ".repeat(Math.max(0, w - s.length));
+    const lines: string[] = [`**WEM Market Update — ${dateStr}**`, ""];
+    const tempStr = manual.weather || (temp.today != null ? `${temp.today}°C` : "-");
+    lines.push(`Perth: ${tempStr}`);
+    if (demand) lines.push(`Demand: ${Math.round(demand.currentMW).toLocaleString()} MW`);
+    if (gen) {
+      lines.push("", "**Generation Mix**");
+      const genCols = ["Fuel", "MW"];
+      const genRows: string[][] = [];
+      if (gen.coal > 0) genRows.push(["Coal", gen.coal.toLocaleString()]);
+      if (gen.gas > 0) genRows.push(["Gas", gen.gas.toLocaleString()]);
+      if (gen.wind > 0) genRows.push(["Wind", gen.wind.toLocaleString()]);
+      if (gen.solar > 0) genRows.push(["Solar", gen.solar.toLocaleString()]);
+      if (gen.battery > 0) genRows.push(["Battery", gen.battery.toLocaleString()]);
+      genRows.push(["Total", gen.total.toLocaleString()]);
+      const gW = genCols.map((c, i) => Math.max(c.length, ...genRows.map((r) => r[i].length)));
+      lines.push(genCols.map((c, i) => pad(c, gW[i])).join("  "));
+      lines.push(gW.map((w) => "-".repeat(w)).join("  "));
+      for (const row of genRows) lines.push(row.map((c, i) => pad(c, gW[i])).join("  "));
+    }
+    if (thermalOutages.length > 0) {
+      lines.push("", "**Outages**");
+      const oCols = ["Unit", "Offline MW", "Fuel"];
+      const oRows = thermalOutages.map((o) => [o.name, String(o.offlineMW), o.fuelType]);
+      const oW = oCols.map((c, i) => Math.max(c.length, ...oRows.map((r) => r[i].length)));
+      lines.push(oCols.map((c, i) => pad(c, oW[i])).join("  "));
+      lines.push(oW.map((w) => "-".repeat(w)).join("  "));
+      for (const row of oRows) lines.push(row.map((c, i) => pad(c, oW[i])).join("  "));
+    }
+    if (manual.notes) lines.push("", "**Notes**", manual.notes);
+    return lines.join("\n");
+  }
+}
+
+function buildWEMTableHtml(wem: WEMMarketData, manual: WEMManualData, dark = false): string {
+  const dateStr = new Date().toLocaleDateString("en-AU", {
+    timeZone: "Australia/Perth", weekday: "short", day: "numeric", month: "short", year: "numeric",
+  });
+  const border = dark ? "#333" : "#ccc";
+  const thBg = dark ? "#1a1a1a" : "#f5f5f5";
+  const thColor = dark ? "#e4e4e7" : "inherit";
+  const tdColor = dark ? "#a1a1aa" : "inherit";
+  const ts = `style="border:1px solid ${border};padding:4px 8px;text-align:left;color:${tdColor}"`;
+  const ths = `style="border:1px solid ${border};padding:4px 8px;text-align:left;font-weight:bold;background:${thBg};color:${thColor}"`;
+  const tbl = `style="border-collapse:collapse;font-size:11px;font-family:ui-monospace,monospace"`;
+
+  function table(headers: string[], rows: string[][]): string {
+    const hdr = headers.map((h) => `<th ${ths}>${h}</th>`).join("");
+    const body = rows.map((r) => "<tr>" + r.map((c) => `<td ${ts}>${c}</td>`).join("") + "</tr>").join("");
+    return `<table ${tbl}><tr>${hdr}</tr>${body}</table>`;
+  }
+
+  const bStyle = dark ? ' style="color:#e4e4e7"' : "";
+  const parts: string[] = [`<b${bStyle}>WEM Market Update — ${dateStr}</b><br><br>`];
+
+  const gen = wem.generation;
+  const demand = wem.demand;
+  const temp = wem.temp;
+  const tempStr = manual.weather || (temp.today != null ? `${temp.today}°C` : "-");
+  const thermalOutages = wem.outages.filter((o) => o.fuelType === "coal" || o.fuelType === "gas");
+
+  // Summary row
+  const summaryRows = [
+    ["Perth Temp", tempStr],
+    ["Demand", demand ? `${Math.round(demand.currentMW).toLocaleString()} MW` : "-"],
+    ["Wind", gen ? `${gen.wind.toLocaleString()} MW` : "-"],
+    ["Solar", gen ? `${gen.solar.toLocaleString()} MW` : "-"],
+  ];
+  parts.push(table(["Metric", "Value"], summaryRows));
+
+  // Generation mix
+  if (gen) {
+    parts.push(`<br><b${bStyle}>Generation Mix</b><br>`);
+    const genRows: string[][] = [];
+    if (gen.coal > 0) genRows.push(["Coal", `${gen.coal.toLocaleString()} MW`]);
+    if (gen.gas > 0) genRows.push(["Gas", `${gen.gas.toLocaleString()} MW`]);
+    if (gen.wind > 0) genRows.push(["Wind", `${gen.wind.toLocaleString()} MW`]);
+    if (gen.solar > 0) genRows.push(["Solar", `${gen.solar.toLocaleString()} MW`]);
+    if (gen.battery > 0) genRows.push(["Battery", `${gen.battery.toLocaleString()} MW`]);
+    genRows.push(["<b>Total</b>", `<b>${gen.total.toLocaleString()} MW</b>`]);
+    parts.push(table(["Fuel", "Output"], genRows));
+  }
+
+  // Outages
+  if (thermalOutages.length > 0) {
+    parts.push(`<br><b${bStyle}>Outages</b><br>`);
+    const oRows = thermalOutages.map((o) => [o.name, `${o.offlineMW} MW`, o.fuelType]);
+    parts.push(table(["Unit", "Offline", "Fuel"], oRows));
+  }
+
+  if (manual.notes) {
+    parts.push(`<br><b${bStyle}>Notes</b><br>${manual.notes.replace(/\n/g, "<br>")}`);
+  }
+
+  return parts.join("");
+}
+
+// --- WEM Market Content component ---
+
+function WEMMarketContent() {
+  const { data: wem, isLoading } = useSWR<WEMMarketData>(
+    "/api/wem-market",
+    fetcher,
+    { refreshInterval: 30_000 },
+  );
+
+  const [manual, setManual] = useState<WEMManualData>(loadWEMManualData);
+  const [editingManual, setEditingManual] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [textStyle, setTextStyle] = useState<MarketTextStyle>(() => {
+    try {
+      const saved = localStorage.getItem("wem-market-text-style");
+      if (saved && ["compact", "dot-point", "narrative", "table"].includes(saved)) return saved as MarketTextStyle;
+    } catch { /* ignore */ }
+    return "compact";
+  });
+  const changeStyle = (s: MarketTextStyle) => {
+    setTextStyle(s);
+    localStorage.setItem("wem-market-text-style", s);
+  };
+
+  // Draft state for manual editor
+  const [draft, setDraft] = useState<WEMManualData>({ date: "", weather: "", demandOutlook: "", windOutlook: "", notes: "" });
+
+  const startEdit = () => { setDraft({ ...manual }); setEditingManual(true); };
+  const saveEdit = () => {
+    const next = { ...draft, date: getToday() };
+    saveWEMManualData(next);
+    setManual(next);
+    setEditingManual(false);
+  };
+
+  const handleCopy = async () => {
+    if (!wem) return;
+    const text = buildWEMMarketText(wem, manual, textStyle);
+    const plainText = text.replace(/\*\*/g, "");
+    let html: string;
+    if (textStyle === "table") {
+      html = buildWEMTableHtml(wem, manual);
+    } else {
+      html = text.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/\n/g, "<br>");
+    }
+    const blob = new Blob([html], { type: "text/html" });
+    const plainBlob = new Blob([plainText], { type: "text/plain" });
+    await navigator.clipboard.write([new ClipboardItem({ "text/html": blob, "text/plain": plainBlob })]);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  if (isLoading || !wem) return <LoadingState />;
+
+  // --- Edit mode ---
+  if (editingManual) {
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-medium text-zinc-300">Edit WEM Notes</h2>
+          <div className="flex gap-2">
+            <button onClick={() => setEditingManual(false)} className="px-3 py-1.5 text-xs rounded-md font-medium text-zinc-400 hover:text-zinc-200 hover:bg-white/[0.04] transition-colors">Cancel</button>
+            <button onClick={saveEdit} className="px-3 py-1.5 text-xs rounded-md font-medium bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25 transition-colors flex items-center gap-1.5">
+              <Save className="h-3.5 w-3.5" /> Save
+            </button>
+          </div>
+        </div>
+        <Card className="rounded-xl">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-2"><Pencil className="h-4 w-4 text-zinc-400" /> WEM Market Notes</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {([
+              ["weather", "Weather (e.g. 30 degrees and sunny)"],
+              ["demandOutlook", "Demand outlook (e.g. Expected to drop tomorrow)"],
+              ["windOutlook", "Wind outlook (e.g. Low wind, picking up evening peak)"],
+            ] as const).map(([key, placeholder]) => (
+              <div key={key} className="space-y-1">
+                <label className="text-[11px] text-zinc-500 font-sans">{key === "weather" ? "Weather" : key === "demandOutlook" ? "Demand Outlook" : "Wind Outlook"}</label>
+                <input
+                  value={draft[key]}
+                  onChange={(e) => setDraft((p) => ({ ...p, [key]: e.target.value }))}
+                  placeholder={placeholder}
+                  className="w-full bg-white/[0.05] border border-white/[0.08] rounded px-2 py-1.5 text-xs text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-500"
+                />
+              </div>
+            ))}
+            <div className="space-y-1">
+              <label className="text-[11px] text-zinc-500 font-sans">Notes (unit runs, RCT testing, etc.)</label>
+              <textarea
+                value={draft.notes}
+                onChange={(e) => setDraft((p) => ({ ...p, notes: e.target.value }))}
+                placeholder="PNJ U1 14/04 1800-2030 RCT&#10;WGP1 bid to 13:30"
+                rows={4}
+                className="w-full bg-white/[0.05] border border-white/[0.08] rounded px-2 py-1.5 text-xs text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-500"
+              />
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  // --- Display ---
+  const gen = wem.generation;
+  const demand = wem.demand;
+  const summaryText = buildWEMMarketText(wem, manual, textStyle);
+
+  const fuelColor: Record<string, string> = {
+    coal: "text-zinc-300", gas: "text-orange-400", wind: "text-emerald-400",
+    solar: "text-yellow-400", battery: "text-cyan-400", other: "text-zinc-500",
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr_1fr] gap-3 lg:items-stretch">
+        {/* Left column: WEM data */}
+        <div className="space-y-3">
+          {/* Summary card */}
+          <div className="rounded-lg border bg-teal-500/10 border-teal-500/20 p-3 space-y-1.5">
+            <div className="text-xs font-semibold text-teal-400">WEM — Perth</div>
+            {wem.temp.today != null && (
+              <div className="flex items-center gap-1.5">
+                <Thermometer className="h-3 w-3 text-orange-400 shrink-0" />
+                <span className="text-[11px] text-zinc-500 font-sans w-16">Temp</span>
+                <span className="text-[11px] text-zinc-300">
+                  Max {manual.weather || `${wem.temp.today}°C`}
+                </span>
+              </div>
+            )}
+            {demand && (
+              <div className="flex items-center gap-1.5">
+                <Zap className="h-3 w-3 text-blue-400 shrink-0" />
+                <span className="text-[11px] text-zinc-500 font-sans w-16">Demand</span>
+                <span className="text-[11px] text-zinc-300 font-mono tabular-nums">
+                  {Math.round(demand.currentMW).toLocaleString()}
+                  <span className="text-zinc-500 ml-0.5 font-sans">MW</span>
+                </span>
+              </div>
+            )}
+            {gen && gen.wind > 0 && (
+              <div className="flex items-center gap-1.5">
+                <Wind className="h-3 w-3 text-emerald-400 shrink-0" />
+                <span className="text-[11px] text-zinc-500 font-sans w-16">Wind</span>
+                <span className="text-[11px] text-zinc-300 font-mono tabular-nums">
+                  {gen.wind.toLocaleString()}
+                  <span className="text-zinc-500 ml-0.5 font-sans">MW</span>
+                </span>
+              </div>
+            )}
+            {gen && gen.solar > 0 && (
+              <div className="flex items-center gap-1.5">
+                <Sun className="h-3 w-3 text-yellow-400 shrink-0" />
+                <span className="text-[11px] text-zinc-500 font-sans w-16">Solar</span>
+                <span className="text-[11px] text-zinc-300 font-mono tabular-nums">
+                  {gen.solar.toLocaleString()}
+                  <span className="text-zinc-500 ml-0.5 font-sans">MW</span>
+                </span>
+              </div>
+            )}
+          </div>
+
+          {/* Generation mix — grid grouped by fuel type */}
+          {gen && (() => {
+            const fuelGroups = (["coal", "gas", "wind", "solar", "battery"] as const)
+              .filter((f) => gen[f] > 0 || gen.facilities.some((u) => u.fuelType === f && u.mw > 0))
+              .map((f) => ({
+                fuel: f,
+                totalMW: gen[f],
+                units: gen.facilities.filter((u) => u.fuelType === f && u.mw > 0).sort((a, b) => b.mw - a.mw),
+              }));
+            const fuelBorder: Record<string, string> = {
+              coal: "border-zinc-500/20", gas: "border-orange-500/20", wind: "border-emerald-500/20",
+              solar: "border-yellow-500/20", battery: "border-cyan-500/20",
+            };
+            const fuelBg: Record<string, string> = {
+              coal: "bg-zinc-500/5", gas: "bg-orange-500/5", wind: "bg-emerald-500/5",
+              solar: "bg-yellow-500/5", battery: "bg-cyan-500/5",
+            };
+            return (
+              <div className="space-y-2">
+                <div className="text-xs font-medium flex items-center gap-1.5 text-zinc-300">
+                  <Zap className="h-3.5 w-3.5 text-zinc-400" /> Generation — {gen.total.toLocaleString()} MW
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+                  {fuelGroups.map(({ fuel, totalMW, units }) => (
+                    <div key={fuel} className={cn("rounded-lg border p-2.5 space-y-1.5", fuelBorder[fuel], fuelBg[fuel])}>
+                      <div className="flex items-center justify-between">
+                        <span className={cn("text-[11px] font-semibold capitalize", fuelColor[fuel])}>{fuel}</span>
+                        <span className="text-[11px] font-mono text-zinc-400 tabular-nums">{totalMW.toLocaleString()} MW</span>
+                      </div>
+                      <div className="space-y-0.5">
+                        {units.map((u) => (
+                          <div key={u.facilityCode} className="flex justify-between text-[10px]">
+                            <span className="font-mono text-zinc-400">{u.name}</span>
+                            <span className="font-mono text-zinc-500 tabular-nums">{u.mw.toFixed(0)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* Outages — thermal units not in dispatch */}
+          <div className="rounded-lg border bg-card p-2.5 space-y-2">
+            <div className="text-xs font-medium flex items-center gap-1.5 text-zinc-300">
+              <AlertTriangle className="h-3.5 w-3.5 text-amber-400" /> Offline
+            </div>
+            {wem.outages.length === 0 ? (
+              <div className="text-[11px] text-zinc-500">All tracked units dispatching</div>
+            ) : (
+              <div className="flex flex-wrap gap-1.5">
+                {wem.outages.map((o) => (
+                  <div
+                    key={o.facilityCode}
+                    className={cn(
+                      "inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1",
+                      o.type === "full"
+                        ? "border-rose-500/20 bg-rose-500/10"
+                        : "border-amber-500/20 bg-amber-500/10",
+                    )}
+                  >
+                    <span className={cn(
+                      "text-[11px] font-bold font-mono",
+                      o.type === "full" ? "text-rose-400" : "text-amber-400",
+                    )}>{o.name}</span>
+                    <span className="text-[10px] text-zinc-400">
+                      {o.type === "full" ? "out" : `limited ${o.availableMW}/${o.maxCapacity}MW`}
+                      {o.expectedReturn && (
+                        <span className="text-zinc-500 ml-0.5">
+                          till {new Date(o.expectedReturn).toLocaleDateString("en-AU", { timeZone: "Australia/Perth", day: "numeric", month: "short" })}
+                        </span>
+                      )}
+                      <span className="text-zinc-600 ml-0.5">{o.fuelType}</span>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Upcoming outages */}
+          {wem.upcomingOutages && wem.upcomingOutages.length > 0 && (
+            <div className="rounded-lg border bg-card p-2.5 space-y-2">
+              <div className="text-xs font-medium flex items-center gap-1.5 text-zinc-300">
+                <Clock className="h-3.5 w-3.5 text-zinc-400" /> Upcoming Outages
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {wem.upcomingOutages.map((o) => {
+                  const startStr = new Date(o.outageStart).toLocaleDateString("en-AU", { timeZone: "Australia/Perth", day: "numeric", month: "short" });
+                  const endStr = o.expectedReturn
+                    ? new Date(o.expectedReturn).toLocaleDateString("en-AU", { timeZone: "Australia/Perth", day: "numeric", month: "short" })
+                    : null;
+                  return (
+                    <div key={o.facilityCode} className="inline-flex items-center gap-1.5 rounded-md border border-zinc-500/20 bg-zinc-500/10 px-2.5 py-1">
+                      <span className="text-[11px] font-bold font-mono text-zinc-300">{o.name}</span>
+                      <span className="text-[10px] text-zinc-400">
+                        {startStr}{endStr ? ` \u2192 ${endStr}` : ""}
+                        <span className="text-zinc-600 ml-0.5">{o.fuelType}</span>
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Right column: copyable text + edit button */}
+        <div className="relative rounded-lg border border-input bg-white/[0.03] p-3 pr-10 text-[11px] font-mono text-zinc-300 whitespace-pre-wrap break-words leading-relaxed overflow-auto min-h-[300px]">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 mb-2 not-prose" style={{ fontFamily: "inherit" }}>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] text-zinc-500 font-sans">Style:</span>
+              {([["compact", "Compact"], ["dot-point", "Dot Point"], ["narrative", "Narrative"], ["table", "Table"]] as const).map(([key, label]) => (
+                <button
+                  key={key}
+                  onClick={() => changeStyle(key)}
+                  className={cn(
+                    "px-2 py-0.5 rounded text-[10px] font-medium font-sans transition-colors",
+                    textStyle === key
+                      ? "bg-zinc-700 text-zinc-200"
+                      : "bg-transparent text-zinc-600 border border-zinc-700/50",
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <Button variant="ghost" size="icon-sm" className="absolute top-2 right-2" onClick={handleCopy}>
+            {copied ? <Check className="h-4 w-4 text-emerald-400" /> : <Copy className="h-4 w-4" />}
+          </Button>
+          {textStyle === "table" ? (
+            <div
+              className="market-table-preview"
+              dangerouslySetInnerHTML={{ __html: buildWEMTableHtml(wem, manual, true) }}
+            />
+          ) : (
+            summaryText.split("\n").map((line, i) => {
+              const parts = line.split(/(\*\*.*?\*\*)/g);
+              return (
+                <span key={i}>
+                  {parts.map((part, j) =>
+                    part.startsWith("**") && part.endsWith("**")
+                      ? <strong key={j} className="text-zinc-100 font-semibold">{part.slice(2, -2)}</strong>
+                      : part
+                  )}
+                  {"\n"}
+                </span>
+              );
+            })
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function buildMarketText(market: MarketSummaryData, manual: MarketManualData, outageFuels?: Set<string>, icFilter?: Set<string>, style: MarketTextStyle = "compact"): string {
   const dateStr = new Date().toLocaleDateString("en-AU", {
     timeZone: "Australia/Brisbane", weekday: "short", day: "numeric", month: "short", year: "numeric",
@@ -2489,7 +3121,17 @@ function buildMarketTableHtml(market: MarketSummaryData, manual: MarketManualDat
   return parts.join("");
 }
 
-function MarketAnalysisTab() {
+function MarketAnalysisTab({ market }: { market: "nem" | "wem" }) {
+  // Market now lives in the sidebar as two items (NEM, WEM) under a Market heading.
+  // The internal toggle was removed — the parent picks which content to render.
+  return (
+    <div className="space-y-3">
+      {market === "nem" ? <NEMMarketContent /> : <WEMMarketContent />}
+    </div>
+  );
+}
+
+function NEMMarketContent() {
   const { data: rawData, isLoading } = useSWR<{ market: MarketSummaryData }>(
     "/api/analytics?tab=market",
     fetcher,

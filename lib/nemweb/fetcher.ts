@@ -313,3 +313,103 @@ export async function getDuidInfoMap(): Promise<Map<string, DuidInfo>> {
     return map;
   });
 }
+
+// --- Archive fetcher (historical daily zips) -------------------------------
+//
+// AEMO's /Reports/Archive/{report}/ holds one zip per day (PUBLIC_{REPORT}_YYYYMMDD.zip).
+// Each daily zip is a container of ~288 inner zips (one per 5-min dispatch interval),
+// and each inner zip holds one CSV. To get a full day's data we download the outer
+// zip, iterate every inner .zip entry, unzip it, parse the CSV, and merge into one
+// table-map keyed by compound "report_table" names (same as parseNEMWebCSV).
+
+const ARCHIVE_DAY_TTL_PAST = 24 * 60 * 60 * 1000; // 24h for completed days (effectively immutable)
+const ARCHIVE_DAY_TTL_TODAY = 60 * 1000;          // 60s for the current day
+
+const archiveDayCache = new Map<string, CacheEntry<Map<string, Record<string, string>[]>>>();
+
+/** YYYY-MM-DD → YYYYMMDD */
+function compactDate(isoDate: string): string {
+  return isoDate.replace(/-/g, "");
+}
+
+function isoIsToday(isoDate: string): boolean {
+  const todayIso = new Date().toISOString().slice(0, 10);
+  return isoDate === todayIso;
+}
+
+export type ArchiveReport = "DISPATCHSCADA" | "DISPATCHIS";
+
+const ARCHIVE_PATHS: Record<ArchiveReport, string> = {
+  DISPATCHSCADA: "/Reports/Archive/Dispatch_SCADA/",
+  DISPATCHIS:    "/Reports/Archive/DispatchIS_Reports/",
+};
+
+/**
+ * Fetch one day's worth of archived data for a given report.
+ * isoDate is YYYY-MM-DD. Returns the same table-map shape as fetchLatest entries.
+ *
+ * `tables` optionally filters the output to only the named compound table keys
+ * (e.g. "DISPATCH_PRICE"). This is critical for memory — DispatchIS contains ~15
+ * tables (REGIONSUM, INTERCONNECTORRES, CASE_SOLUTION, etc.) and dropping the
+ * unneeded ones at parse time reduces per-day memory by ~90%.
+ *
+ * Past days are cached for 24h; today for 60s (archive publishes ~01:01 next day
+ * but we still want a short TTL to pick up fresh publishes).
+ */
+export async function fetchArchiveDay(
+  report: ArchiveReport,
+  isoDate: string,
+  tables?: ReadonlySet<string>,
+): Promise<Map<string, Record<string, string>[]>> {
+  const tablesKey = tables ? [...tables].sort().join(",") : "*";
+  const key = `${report}:${isoDate}:${tablesKey}`;
+  const cached = archiveDayCache.get(key);
+  if (cached && cached.expiry > Date.now()) return cached.data;
+
+  return dedup(`archiveDay:${key}`, async () => {
+    const compact = compactDate(isoDate);
+    const url = `${BASE}${ARCHIVE_PATHS[report]}PUBLIC_${report}_${compact}.zip`;
+
+    const res = await fetchWithRetry(url);
+    const buf = await res.arrayBuffer();
+    const outerZip = await JSZip.loadAsync(buf);
+
+    const merged = new Map<string, Record<string, string>[]>();
+
+    // Collect inner zip entries in filename order (AEMO names are chronological)
+    const innerEntries = Object.keys(outerZip.files)
+      .filter((n) => n.toLowerCase().endsWith(".zip"))
+      .sort();
+
+    for (const entryName of innerEntries) {
+      const innerBuf = await outerZip.files[entryName].async("uint8array");
+      const innerZip = await JSZip.loadAsync(innerBuf);
+
+      let csvText = "";
+      for (const name of Object.keys(innerZip.files)) {
+        if (name.toLowerCase().endsWith(".csv")) {
+          csvText = await innerZip.files[name].async("text");
+          break;
+        }
+      }
+      if (!csvText) continue;
+
+      const parsed = parseNEMWebCSV(csvText);
+      for (const [table, rows] of parsed) {
+        if (tables && !tables.has(table)) continue;
+        const existing = merged.get(table);
+        if (existing) existing.push(...rows);
+        else merged.set(table, rows.slice());
+      }
+    }
+
+    const ttl = isoIsToday(isoDate) ? ARCHIVE_DAY_TTL_TODAY : ARCHIVE_DAY_TTL_PAST;
+    archiveDayCache.set(key, { data: merged, expiry: Date.now() + ttl });
+    return merged;
+  });
+}
+
+/** Clear archive day cache — used for forced refresh */
+export function clearArchiveCache(): void {
+  archiveDayCache.clear();
+}

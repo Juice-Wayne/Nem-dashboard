@@ -51,3 +51,6 @@ query-*-output.txt
 # OS
 Thumbs.db
 nul
+
+# local debug / scratch data
+case.json

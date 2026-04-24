@@ -15,9 +15,7 @@ export default function RootLayout({
     <html lang="en" className="dark">
       <body className="antialiased font-sans">
         <div className="min-h-screen bg-background">
-          <main className="p-2 md:p-3">
-            {children}
-          </main>
+          <main>{children}</main>
         </div>
       </body>
     </html>
