@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { fetchArchiveDay } from "@/lib/nemweb";
 
-const LYB_DUIDS = ["LOYYB1", "LOYYB2"] as const;
 const SCADA_TABLES = new Set(["DISPATCH_UNIT_SCADA"]);
 
 interface IntervalResponse {
@@ -71,9 +70,17 @@ export async function GET(request: NextRequest) {
     const buckets = new Map<string, { LOYYB1: number[]; LOYYB2: number[] }>();
     for (const hh of hhs) buckets.set(hh, { LOYYB1: [], LOYYB2: [] });
 
-    for (const date of datesNeeded) {
-      const tables = await fetchArchiveDay("DISPATCHSCADA", date, SCADA_TABLES);
-      const rows = tables.get("DISPATCH_UNIT_SCADA") ?? [];
+    const results = await Promise.allSettled(
+      Array.from(datesNeeded).map((date) =>
+        fetchArchiveDay("DISPATCHSCADA", date, SCADA_TABLES).then((tables) => ({ date, tables })),
+      ),
+    );
+    for (const r of results) {
+      if (r.status === "rejected") {
+        console.warn("[offloading] SCADA fetch failed:", r.reason instanceof Error ? r.reason.message : r.reason);
+        continue;
+      }
+      const rows = r.value.tables.get("DISPATCH_UNIT_SCADA") ?? [];
       for (const row of rows) {
         const duid = row.DUID;
         if (duid !== "LOYYB1" && duid !== "LOYYB2") continue;
