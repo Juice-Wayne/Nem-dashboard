@@ -320,20 +320,6 @@ export default function HomePage() {
   // Single unlock gate for sensitive tabs (BR Start + Revenue). Password: "power".
   const [powerUnlocked, setPowerUnlocked] = useState(false);
 
-  // VPN gate — on localhost the middleware lets requests through, but we call
-  // /api/vpn-status to verify the VPN adapter is actually connected.
-  const [vpnChecked, setVpnChecked] = useState(false);
-  const [vpnOk, setVpnOk] = useState(true);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const isLocal = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
-    if (!isLocal) { setVpnChecked(true); return; } // Vercel — middleware handles it
-    fetch("/api/vpn-status")
-      .then((r) => { setVpnOk(r.ok); setVpnChecked(true); })
-      .catch(() => { setVpnOk(false); setVpnChecked(true); });
-  }, []);
-
   useEffect(() => {
     const stored = localStorage.getItem("theme");
     const dark = stored !== "light";
@@ -444,24 +430,6 @@ export default function HomePage() {
 
 
 
-  if (!vpnChecked) {
-    return (
-      <div className="flex items-center justify-center h-screen bg-zinc-950 text-zinc-500 text-sm">
-        Checking VPN…
-      </div>
-    );
-  }
-
-  if (!vpnOk) {
-    return (
-      <div className="flex items-center justify-center h-screen bg-zinc-950">
-        <div className="text-center">
-          <h1 className="text-zinc-100 text-xl font-semibold mb-2">Network Required</h1>
-          <p className="text-zinc-500 text-sm">Connect from the office or with the company VPN, then refresh.</p>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="min-h-screen">
