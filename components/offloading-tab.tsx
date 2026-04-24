@@ -201,10 +201,10 @@ export function OffloadingTab() {
               <NumInput value={config.mwReduction} onChange={(v) => update("mwReduction", v)} min={0} />
             </Field>
             <Field label="LYB1 capacity (MW)">
-              <NumInput value={config.lyb1Cap} onChange={(v) => update("lyb1Cap", v)} min={0} />
+              <NumInput value={config.lyb1Cap} onChange={(v) => update("lyb1Cap", v)} min={0} max={999} maxDigits={3} />
             </Field>
             <Field label="LYB2 capacity (MW)">
-              <NumInput value={config.lyb2Cap} onChange={(v) => update("lyb2Cap", v)} min={0} />
+              <NumInput value={config.lyb2Cap} onChange={(v) => update("lyb2Cap", v)} min={0} max={999} maxDigits={3} />
             </Field>
           </div>
           <div className="text-[11px] text-zinc-400 flex gap-6">
