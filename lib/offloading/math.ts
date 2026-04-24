@@ -62,8 +62,10 @@ export function buildSchedule(config: OffloadConfig): ScheduleRow[] {
   const rows: ScheduleRow[] = [];
   const start = new Date(config.startISO).getTime();
   const rate = offloadRate(config);
-  const lyb1Target = config.lyb1Cap - rate / 2;
-  const lyb2Target = config.lyb2Cap - rate / 2;
+  // Clamp at zero — a unit can't run at negative MW. If the event demands
+  // more offload than a unit's capacity, the target bottoms out at shut-down (0).
+  const lyb1Target = Math.max(0, config.lyb1Cap - rate / 2);
+  const lyb2Target = Math.max(0, config.lyb2Cap - rate / 2);
   for (let i = 0; i < rowCount(config); i++) {
     const hhEndMs = start + (i + 1) * 30 * 60 * 1000;
     rows.push({
