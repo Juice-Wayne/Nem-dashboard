@@ -70,7 +70,6 @@ Cumulative MWh vs `MWh_reduction` target as a progress bar with text `"1210 / 16
   Coal offloading event — LYB reducing to ~{forecast_mw} MW from HH {start_hhmm} to {end_hhmm}.
   Target {mwh_reduction} MWh reduction.
   ```
-- **Reset** — clears all inputs + overrides, returns to defaults.
 
 ## Data source
 
@@ -87,7 +86,7 @@ Cumulative MWh vs `MWh_reduction` target as a progress bar with text `"1210 / 16
 - `lib/offloading/math.ts` — pure functions for the calculation model (target-per-HH, cum MWh, progress state). Kept separate so it's trivially unit-testable.
 
 ### Edits
-- `components/side-nav.tsx` — add nav item `{ id: "offloading", label: "Coal Offloading", icon: TrendingDown }` under Tools (after BR Start, before the Revenue entries). Add `"offloading"` to the `NavTabId` union.
+- `components/side-nav.tsx` — add nav item `{ id: "offloading", label: "Coal Offloading", icon: Flame }` under Tools (after BR Start, before the Revenue entries). Add `"offloading"` to the `NavTabId` union.
 - `app/page.tsx` — add `"offloading"` to `TabId`, new `<TabsContent value="offloading"><OffloadingTab /></TabsContent>`.
 
 ### Data flow
