@@ -87,7 +87,6 @@ export function OffloadingTab() {
   }, [data]);
 
   const [overridesMap, setOverridesMap] = useState<OverridesByHH>(() => new Map());
-  const overrides = overridesMap;
 
   const setOverride = (hhEnding: string, field: "lyb1TargetMW" | "lyb2TargetMW" | "actualMW", value: number | undefined) => {
     setOverridesMap((prev) => {
@@ -102,8 +101,8 @@ export function OffloadingTab() {
   };
 
   const rows = useMemo(
-    () => applyActuals(schedule, actuals, overrides, config),
-    [schedule, actuals, overrides, config],
+    () => applyActuals(schedule, actuals, overridesMap, config),
+    [schedule, actuals, overridesMap, config],
   );
 
   /** Paste handler — parses clipboard text as tab/newline rows and fills cells starting at (rowIdx, field). */
@@ -187,7 +186,7 @@ export function OffloadingTab() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {rows.map((r) => (
+              {rows.map((r, rowIdx) => (
                 <TableRow key={r.hhEnding} className="border-white/5 font-mono text-xs">
                   <TableCell>{fmtHHLabel(r.hhEnding)}</TableCell>
                   <TableCell className="text-right">{fmtMW(r.targetOffloadMW)}</TableCell>
@@ -196,14 +195,14 @@ export function OffloadingTab() {
                     isOverride={r.overridden.lyb1TargetMW}
                     onCommit={(v) => setOverride(r.hhEnding, "lyb1TargetMW", v)}
                     onRevert={() => setOverride(r.hhEnding, "lyb1TargetMW", undefined)}
-                    onPaste={(text) => handlePaste(rows.indexOf(r), "lyb1TargetMW", text)}
+                    onPaste={(text) => handlePaste(rowIdx, "lyb1TargetMW", text)}
                   />
                   <EditableCell
                     value={r.lyb2TargetMW}
                     isOverride={r.overridden.lyb2TargetMW}
                     onCommit={(v) => setOverride(r.hhEnding, "lyb2TargetMW", v)}
                     onRevert={() => setOverride(r.hhEnding, "lyb2TargetMW", undefined)}
-                    onPaste={(text) => handlePaste(rows.indexOf(r), "lyb2TargetMW", text)}
+                    onPaste={(text) => handlePaste(rowIdx, "lyb2TargetMW", text)}
                   />
                   <TableCell className="text-right">{fmtMW(r.forecastMW)}</TableCell>
                   <EditableCell
@@ -211,7 +210,7 @@ export function OffloadingTab() {
                     isOverride={r.overridden.actualMW}
                     onCommit={(v) => setOverride(r.hhEnding, "actualMW", v)}
                     onRevert={() => setOverride(r.hhEnding, "actualMW", undefined)}
-                    onPaste={(text) => handlePaste(rows.indexOf(r), "actualMW", text)}
+                    onPaste={(text) => handlePaste(rowIdx, "actualMW", text)}
                   />
                   <TableCell className="text-right">{fmtMW(r.mwLoss)}</TableCell>
                   <TableCell className="text-right">{fmtMW(r.mwhThisHH)}</TableCell>
@@ -220,6 +219,14 @@ export function OffloadingTab() {
               ))}
             </TableBody>
           </Table>
+          <div className="px-3 pt-3">
+            <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+              <div
+                className={`h-full rounded-full transition-all ${progress === "over" ? "bg-red-500" : progress === "behind" ? "bg-amber-500" : "bg-emerald-500"}`}
+                style={{ width: `${Math.min((cumTotal / Math.max(config.mwhReduction, 1)) * 100, 100).toFixed(1)}%` }}
+              />
+            </div>
+          </div>
           <div className="p-3 text-xs flex items-center gap-3">
             <span className="text-zinc-400">Cumulative:</span>
             <span className="font-mono text-zinc-100">{cumTotal.toFixed(1)} / {config.mwhReduction} MWh</span>
