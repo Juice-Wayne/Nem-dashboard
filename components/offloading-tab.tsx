@@ -62,7 +62,15 @@ export function OffloadingTab() {
   const [config, setConfig] = useState<OffloadConfig>(DEFAULTS);
   const [hydrated, setHydrated] = useState(false);
 
-  useEffect(() => { setConfig(loadConfig()); setHydrated(true); }, []);
+  // On mount: hydrate from localStorage but always reset the DATE portion of startISO
+  // to today. Events are almost always same-day; a user who wants a historical date
+  // can still change it — that change just won't persist to the next session.
+  useEffect(() => {
+    const loaded = loadConfig();
+    loaded.startISO = withDate(loaded.startISO, todayDateStr());
+    setConfig(loaded);
+    setHydrated(true);
+  }, []);
   useEffect(() => { if (hydrated) saveConfig(config); }, [config, hydrated]);
 
   const apiUrl = useMemo(() => {
@@ -140,13 +148,22 @@ export function OffloadingTab() {
     <div className="space-y-4">
       <Card className="bg-zinc-900/60 border-white/5">
         <CardContent className="p-4 space-y-3">
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-xs">
-            <Field label="Event start">
+          <div className="grid grid-cols-2 md:grid-cols-6 gap-3 text-xs">
+            <Field label="Start date">
               <input
-                type="datetime-local"
-                value={toInputValue(config.startISO)}
-                onChange={(e) => update("startISO", fromInputValue(e.target.value))}
-                className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-zinc-200 font-mono"
+                type="date"
+                value={toDateInput(config.startISO)}
+                onChange={(e) => update("startISO", withDate(config.startISO, e.target.value))}
+                className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-zinc-200 font-mono w-full"
+              />
+            </Field>
+            <Field label="Start time">
+              <input
+                type="time"
+                step={1800}
+                value={toTimeInput(config.startISO)}
+                onChange={(e) => update("startISO", withTime(config.startISO, e.target.value))}
+                className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-zinc-200 font-mono w-full"
               />
             </Field>
             <Field label="Duration (hrs)">
@@ -277,16 +294,34 @@ function NumInput({ value, onChange, min, max }: { value: number; onChange: (v: 
   );
 }
 
-/** "2026-04-24T13:00:00.000Z" → "2026-04-24T13:00" (local) for datetime-local input. */
-function toInputValue(iso: string): string {
-  const d = new Date(iso);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+function pad2(n: number): string { return String(n).padStart(2, "0"); }
+
+/** Today's date in the user's local timezone, as "YYYY-MM-DD". */
+function todayDateStr(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 }
 
-/** "2026-04-24T13:00" (local) → "2026-04-24T13:00:00.000Z" (UTC ISO). */
-function fromInputValue(local: string): string {
-  return new Date(local).toISOString();
+/** ISO → "YYYY-MM-DD" (local date) for a date input. */
+function toDateInput(iso: string): string {
+  const d = new Date(iso);
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+/** ISO → "HH:MM" (local time) for a time input. */
+function toTimeInput(iso: string): string {
+  const d = new Date(iso);
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+
+/** Replace the date portion of an ISO (keeping local time-of-day) and return a new UTC ISO. */
+function withDate(iso: string, dateStr: string): string {
+  return new Date(`${dateStr}T${toTimeInput(iso)}`).toISOString();
+}
+
+/** Replace the time portion of an ISO (keeping local date) and return a new UTC ISO. */
+function withTime(iso: string, timeStr: string): string {
+  return new Date(`${toDateInput(iso)}T${timeStr}`).toISOString();
 }
 
 function EditableCell({
