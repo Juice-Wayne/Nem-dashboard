@@ -331,20 +331,20 @@ function SummaryCard({ text }: { text: string }) {
   };
 
   return (
-    <Card className="bg-zinc-900/60 border-white/5">
-      <CardContent className="p-3 flex items-start gap-3">
-        <div className="text-[10px] uppercase tracking-wide text-zinc-500 pt-[3px] whitespace-nowrap">AEMO summary</div>
-        <div className="flex-1 text-xs font-mono text-zinc-200 leading-5 select-all">{text}</div>
+    <Card className="bg-zinc-900/60 border-white/5 py-0 gap-0">
+      <CardContent className="px-3 py-2 flex items-center gap-3">
+        <span className="text-[10px] uppercase tracking-wide text-zinc-500 whitespace-nowrap">AEMO</span>
+        <div className="flex-1 text-xs font-mono text-zinc-200 select-all truncate">{text}</div>
         <button
           onClick={copy}
-          className={`shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] font-medium transition-colors ${
+          className={`shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-medium transition-colors ${
             copied
               ? "bg-emerald-500/15 border border-emerald-500/40 text-emerald-300"
               : "bg-zinc-800 border border-zinc-700 text-zinc-200 hover:bg-zinc-700"
           }`}
           title="Copy to clipboard"
         >
-          {copied ? (<><Check className="h-3.5 w-3.5" /> Copied</>) : (<><Copy className="h-3.5 w-3.5" /> Copy</>)}
+          {copied ? (<><Check className="h-3 w-3" /> Copied</>) : (<><Copy className="h-3 w-3" /> Copy</>)}
         </button>
       </CardContent>
     </Card>
