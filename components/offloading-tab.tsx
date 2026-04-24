@@ -86,12 +86,50 @@ export function OffloadingTab() {
     return map;
   }, [data]);
 
-  const overrides: OverridesByHH = useMemo(() => new Map(), []);  // Task 4 will populate
+  const [overridesMap, setOverridesMap] = useState<OverridesByHH>(() => new Map());
+  const overrides = overridesMap;
+
+  const setOverride = (hhEnding: string, field: "lyb1TargetMW" | "lyb2TargetMW" | "actualMW", value: number | undefined) => {
+    setOverridesMap((prev) => {
+      const next = new Map(prev);
+      const row = { ...(next.get(hhEnding) ?? {}) };
+      if (value === undefined) delete row[field];
+      else row[field] = value;
+      if (Object.keys(row).length === 0) next.delete(hhEnding);
+      else next.set(hhEnding, row);
+      return next;
+    });
+  };
 
   const rows = useMemo(
     () => applyActuals(schedule, actuals, overrides, config),
     [schedule, actuals, overrides, config],
   );
+
+  /** Paste handler — parses clipboard text as tab/newline rows and fills cells starting at (rowIdx, field). */
+  const handlePaste = (rowIdx: number, field: "lyb1TargetMW" | "lyb2TargetMW" | "actualMW", text: string) => {
+    const lines = text.replace(/\r/g, "").split("\n").filter((l) => l.length);
+    const fields: Array<"lyb1TargetMW" | "lyb2TargetMW" | "actualMW"> = ["lyb1TargetMW", "lyb2TargetMW", "actualMW"];
+    const startColIdx = fields.indexOf(field);
+    setOverridesMap((prev) => {
+      const next = new Map(prev);
+      lines.forEach((line, lineIdx) => {
+        const cells = line.split("\t");
+        cells.forEach((raw, colIdx) => {
+          const n = Number(raw);
+          if (!Number.isFinite(n)) return;
+          const targetRowIdx = rowIdx + lineIdx;
+          const targetField = fields[startColIdx + colIdx];
+          const targetRow = rows[targetRowIdx];
+          if (!targetRow || !targetField) return;
+          const existing = { ...(next.get(targetRow.hhEnding) ?? {}) };
+          existing[targetField] = n;
+          next.set(targetRow.hhEnding, existing);
+        });
+      });
+      return next;
+    });
+  };
 
   const cumTotal = rows[rows.length - 1]?.cumMWh ?? 0;
   const progress = progressState(rows, config);
@@ -153,10 +191,28 @@ export function OffloadingTab() {
                 <TableRow key={r.hhEnding} className="border-white/5 font-mono text-xs">
                   <TableCell>{fmtHHLabel(r.hhEnding)}</TableCell>
                   <TableCell className="text-right">{fmtMW(r.targetOffloadMW)}</TableCell>
-                  <TableCell className="text-right">{fmtMW(r.lyb1TargetMW)}</TableCell>
-                  <TableCell className="text-right">{fmtMW(r.lyb2TargetMW)}</TableCell>
+                  <EditableCell
+                    value={r.lyb1TargetMW}
+                    isOverride={r.overridden.lyb1TargetMW}
+                    onCommit={(v) => setOverride(r.hhEnding, "lyb1TargetMW", v)}
+                    onRevert={() => setOverride(r.hhEnding, "lyb1TargetMW", undefined)}
+                    onPaste={(text) => handlePaste(rows.indexOf(r), "lyb1TargetMW", text)}
+                  />
+                  <EditableCell
+                    value={r.lyb2TargetMW}
+                    isOverride={r.overridden.lyb2TargetMW}
+                    onCommit={(v) => setOverride(r.hhEnding, "lyb2TargetMW", v)}
+                    onRevert={() => setOverride(r.hhEnding, "lyb2TargetMW", undefined)}
+                    onPaste={(text) => handlePaste(rows.indexOf(r), "lyb2TargetMW", text)}
+                  />
                   <TableCell className="text-right">{fmtMW(r.forecastMW)}</TableCell>
-                  <TableCell className="text-right">{fmtMW(r.actualMW)}</TableCell>
+                  <EditableCell
+                    value={r.actualMW}
+                    isOverride={r.overridden.actualMW}
+                    onCommit={(v) => setOverride(r.hhEnding, "actualMW", v)}
+                    onRevert={() => setOverride(r.hhEnding, "actualMW", undefined)}
+                    onPaste={(text) => handlePaste(rows.indexOf(r), "actualMW", text)}
+                  />
                   <TableCell className="text-right">{fmtMW(r.mwLoss)}</TableCell>
                   <TableCell className="text-right">{fmtMW(r.mwhThisHH)}</TableCell>
                   <TableCell className="text-right">{fmtMW(r.cumMWh)}</TableCell>
@@ -212,4 +268,69 @@ function toInputValue(iso: string): string {
 /** "2026-04-24T13:00" (local) → "2026-04-24T13:00:00.000Z" (UTC ISO). */
 function fromInputValue(local: string): string {
   return new Date(local).toISOString();
+}
+
+function EditableCell({
+  value, isOverride, onCommit, onRevert, onPaste,
+}: {
+  value: number | null;
+  isOverride: boolean;
+  onCommit: (v: number) => void;
+  onRevert: () => void;
+  onPaste: (text: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+
+  const display = value == null || !Number.isFinite(value) ? "—" : value.toFixed(1);
+
+  const startEdit = () => { setDraft(display === "—" ? "" : display); setEditing(true); };
+  const commit = () => {
+    const n = Number(draft);
+    if (Number.isFinite(n)) onCommit(n);
+    setEditing(false);
+  };
+  const cancel = () => setEditing(false);
+
+  return (
+    <TableCell
+      className={`text-right relative cursor-text ${isOverride ? "border-l-2 border-l-blue-500" : ""}`}
+      onClick={(e) => { if (!editing) { e.stopPropagation(); startEdit(); } }}
+    >
+      {editing ? (
+        <input
+          autoFocus
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") commit();
+            else if (e.key === "Escape") cancel();
+          }}
+          onPaste={(e) => {
+            const text = e.clipboardData.getData("text");
+            if (text.includes("\t") || text.includes("\n")) {
+              e.preventDefault();
+              onPaste(text);
+              setEditing(false);
+            }
+          }}
+          className="w-full bg-zinc-950 border border-blue-500 rounded px-1 py-0 text-right font-mono text-xs text-zinc-100 outline-none"
+        />
+      ) : (
+        <>
+          <span>{display}</span>
+          {isOverride && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onRevert(); }}
+              className="ml-1 opacity-40 hover:opacity-100 text-[10px]"
+              title="Revert to AEMO / default"
+            >
+              ↺
+            </button>
+          )}
+        </>
+      )}
+    </TableCell>
+  );
 }
