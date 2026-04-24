@@ -223,8 +223,9 @@ export function OffloadingTab() {
                   />
                   <TableCell className="text-right">{fmtMW(r.forecastMW)}</TableCell>
                   <EditableCell
-                    value={r.actualMW}
+                    value={r.actualMW ?? r.forecastMW}
                     isOverride={r.overridden.actualMW}
+                    isFallback={r.actualMW == null}
                     onCommit={(v) => setOverride(r.hhEnding, "actualMW", v)}
                     onRevert={() => setOverride(r.hhEnding, "actualMW", undefined)}
                     onPaste={(text) => handlePaste(rowIdx, "actualMW", text)}
@@ -325,10 +326,13 @@ function withTime(iso: string, timeStr: string): string {
 }
 
 function EditableCell({
-  value, isOverride, onCommit, onRevert, onPaste,
+  value, isOverride, isFallback = false, onCommit, onRevert, onPaste,
 }: {
   value: number | null;
   isOverride: boolean;
+  /** When true, the displayed value is a forecast stand-in (not a confirmed measurement).
+   *  Renders italic/muted so the user can tell it's not real data yet and click to enter one. */
+  isFallback?: boolean;
   onCommit: (v: number) => void;
   onRevert: () => void;
   onPaste: (text: string) => void;
@@ -373,7 +377,12 @@ function EditableCell({
         />
       ) : (
         <>
-          <span>{display}</span>
+          <span
+            className={isFallback ? "italic text-zinc-500" : undefined}
+            title={isFallback ? "Forecast — click to enter actual" : undefined}
+          >
+            {display}
+          </span>
           {isOverride && (
             <button
               onClick={(e) => { e.stopPropagation(); onRevert(); }}
