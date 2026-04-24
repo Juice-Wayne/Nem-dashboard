@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { useAutoRefresh } from "@/lib/hooks/use-auto-refresh";
 import { NemIntervalBar } from "@/components/nem-interval-bar";
 import { RevenueTab } from "@/components/revenue-tab";
+import { OffloadingTab } from "@/components/offloading-tab";
 import { SideNav, SIDE_NAV_COLLAPSED_WIDTH, type NavTabId } from "@/components/side-nav";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -168,7 +169,7 @@ type Direction = "all" | "increase" | "decrease";
 type TabId =
   | "prices" | "demand" | "interconnectors" | "sensitivities" | "actuals"
   | "market-nem"
-  | "spikes" | "startcost" | "braemar" | "bdl";
+  | "spikes" | "startcost" | "offloading" | "braemar" | "bdl";
 
 const REBIDS_TABS: ReadonlyArray<TabId> = ["prices", "demand", "interconnectors", "sensitivities", "actuals"];
 
@@ -620,6 +621,10 @@ export default function HomePage() {
         {/* === BRAEMAR START TAB (password-gated) === */}
         <TabsContent value="startcost">
           <StartCostTab />
+        </TabsContent>
+
+        <TabsContent value="offloading" className="mt-4">
+          <OffloadingTab />
         </TabsContent>
 
         {/* === MARKET ANALYSIS TAB === */}

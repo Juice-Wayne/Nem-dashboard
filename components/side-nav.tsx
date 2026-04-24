@@ -10,6 +10,7 @@ import {
   Zap,
   AlertTriangle,
   Flag,
+  Flame,
   Factory,
   Lock,
   type LucideIcon,
@@ -25,6 +26,7 @@ export type NavTabId =
   | "market-nem"
   | "spikes"
   | "startcost"
+  | "offloading"
   | "braemar"
   | "bdl";
 
@@ -68,6 +70,7 @@ const SECTIONS: NavSection[] = [
     label: "Tools",
     items: [
       { id: "startcost", label: "Braemar Start", icon: Flag },
+      { id: "offloading", label: "Coal Offloading", icon: Flame },
       { id: "braemar", label: "Braemar Revenue", icon: Factory, gated: true },
       { id: "bdl", label: "BDL Revenue", icon: Factory, gated: true },
     ],

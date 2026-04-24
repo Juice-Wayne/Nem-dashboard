@@ -223,9 +223,21 @@ export function OffloadingTab() {
           <div className="p-3 text-xs flex items-center gap-3">
             <span className="text-zinc-400">Cumulative:</span>
             <span className="font-mono text-zinc-100">{cumTotal.toFixed(1)} / {config.mwhReduction} MWh</span>
-            <span className={`ml-auto text-[11px] ${progress === "over" ? "text-red-400" : progress === "behind" ? "text-amber-400" : "text-emerald-400"}`}>
+            <span className={`text-[11px] ${progress === "over" ? "text-red-400" : progress === "behind" ? "text-amber-400" : "text-emerald-400"}`}>
               {progress === "over" ? "over target" : progress === "behind" ? "behind schedule" : "on track"}
             </span>
+            <button
+              onClick={() => {
+                const startLabel = fmtHHLabel(config.startISO);
+                const endLabel = fmtHHLabel(new Date(new Date(config.startISO).getTime() + config.durationHrs * 3600_000).toISOString());
+                const forecastMW = rows[0]?.forecastMW ?? 0;
+                const text = `Coal offloading event — LYB reducing to ~${forecastMW.toFixed(0)} MW from HH ${startLabel} to ${endLabel}. Target ${config.mwhReduction} MWh reduction.`;
+                void navigator.clipboard.writeText(text);
+              }}
+              className="ml-auto px-2 py-1 rounded border border-zinc-700 text-zinc-300 hover:bg-zinc-800 text-[11px]"
+            >
+              Copy summary
+            </button>
           </div>
         </CardContent>
       </Card>
