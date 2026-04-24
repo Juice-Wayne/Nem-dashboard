@@ -2,14 +2,13 @@
  * Verify math.ts against the known-good Q326 workbook values.
  * Run: npx tsx scripts/verify-offloading-math.ts
  */
-import { buildSchedule, applyActuals, offloadRate, totalCap, totalMwhReduction, type OffloadConfig } from "../lib/offloading/math";
+import { buildSchedule, applyActuals, offloadRate, totalCap, type OffloadConfig } from "../lib/offloading/math";
 
 // Q326 workbook inputs (from context/LYB Coal Offloading - Q326.xlsx sheet "LYB targets for offload")
-// Workbook expressed 1600 MWh / 4 hrs; we input the equivalent constant MW reduction (400).
 const config: OffloadConfig = {
   startISO: "2025-07-01T13:00:00.000Z",
   durationHrs: 4,
-  mwReduction: 400,
+  mwReduction: 1600,
   lyb1Cap: 585,
   lyb2Cap: 585,
 };
@@ -22,8 +21,7 @@ function check(label: string, got: number, want: number, tol = 0.01) {
 
 console.log("Verifying OffloadConfig helpers...");
 check("totalCap", totalCap(config), 1170);
-check("offloadRate", offloadRate(config), 400);           // MW held constant
-check("totalMwhReduction", totalMwhReduction(config), 1600); // 400 MW × 4 hrs
+check("offloadRate", offloadRate(config), 400);  // 1600 total / 4 hrs
 
 console.log("\nVerifying buildSchedule...");
 const schedule = buildSchedule(config);

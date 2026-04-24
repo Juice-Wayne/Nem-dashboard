@@ -4,8 +4,10 @@ import React, { useEffect, useMemo, useState } from "react";
 import useSWR from "swr";
 import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Info } from "lucide-react";
 import {
-  applyActuals, buildSchedule, offloadRate, totalCap, totalMwhReduction, progressState,
+  applyActuals, buildSchedule, offloadRate, totalCap, progressState,
   type OffloadConfig, type ActualsByHH, type OverridesByHH,
 } from "@/lib/offloading/math";
 
@@ -14,7 +16,7 @@ const STORAGE_KEY = "nem-offloading-config";
 const DEFAULTS: OffloadConfig = {
   startISO: nextHalfHourISO(),
   durationHrs: 4,
-  mwReduction: 400,
+  mwReduction: 1600,
   lyb1Cap: 585,
   lyb2Cap: 585,
 };
@@ -32,9 +34,9 @@ function loadConfig(): OffloadConfig {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return DEFAULTS;
     const parsed = JSON.parse(raw) as Partial<OffloadConfig> & { mwhReduction?: number };
-    // Migrate legacy `mwhReduction` (total MWh over event) → `mwReduction` (constant MW per HH).
+    // Migrate legacy `mwhReduction` → `mwReduction` (same semantics: total reduction across event).
     if (parsed.mwReduction == null && parsed.mwhReduction != null) {
-      parsed.mwReduction = parsed.mwhReduction / (parsed.durationHrs || 4);
+      parsed.mwReduction = parsed.mwhReduction;
       delete parsed.mwhReduction;
     }
     return { ...DEFAULTS, ...parsed } as OffloadConfig;
@@ -164,18 +166,15 @@ export function OffloadingTab() {
               />
             </Field>
             <Field label="Start time">
-              <input
-                type="time"
-                step={1800}
+              <TimePicker
                 value={toTimeInput(config.startISO)}
-                onChange={(e) => update("startISO", withTime(config.startISO, e.target.value))}
-                className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-zinc-200 font-mono w-full"
+                onChange={(hhmm24) => update("startISO", withTime(config.startISO, hhmm24))}
               />
             </Field>
-            <Field label="Duration (hrs)">
+            <Field label="Duration (hrs)" tooltip="Input the total duration in hours of the offloading event.">
               <NumInput value={config.durationHrs} onChange={(v) => update("durationHrs", v)} min={1} max={99} maxDigits={2} />
             </Field>
-            <Field label="Total MW reduction">
+            <Field label="Total MW reduction" tooltip="Input the total amount of MW needed to offload across the whole event.">
               <NumInput value={config.mwReduction} onChange={(v) => update("mwReduction", v)} min={0} />
             </Field>
             <Field label="LYB1 capacity (MW)">
@@ -187,7 +186,6 @@ export function OffloadingTab() {
           </div>
           <div className="text-[11px] text-zinc-400 flex gap-6">
             <span>Offload rate: <span className="text-zinc-200 font-mono">{offloadRate(config).toFixed(1)} MW/hh</span></span>
-            <span>MWh total: <span className="text-zinc-200 font-mono">{totalMwhReduction(config).toFixed(0)} MWh</span></span>
             <span>Total capacity: <span className="text-zinc-200 font-mono">{totalCap(config)} MW</span></span>
           </div>
         </CardContent>
@@ -248,13 +246,13 @@ export function OffloadingTab() {
             <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden">
               <div
                 className={`h-full rounded-full transition-all ${progress === "over" ? "bg-red-500" : progress === "behind" ? "bg-amber-500" : "bg-emerald-500"}`}
-                style={{ width: `${Math.min((cumTotal / Math.max(totalMwhReduction(config), 1)) * 100, 100).toFixed(1)}%` }}
+                style={{ width: `${Math.min((cumTotal / Math.max(config.mwReduction, 1)) * 100, 100).toFixed(1)}%` }}
               />
             </div>
           </div>
           <div className="p-3 text-xs flex items-center gap-3">
             <span className="text-zinc-400">Cumulative:</span>
-            <span className="font-mono text-zinc-100">{cumTotal.toFixed(1)} / {totalMwhReduction(config).toFixed(0)} MWh</span>
+            <span className="font-mono text-zinc-100">{cumTotal.toFixed(1)} / {config.mwReduction.toFixed(0)} MWh</span>
             <span className={`text-[11px] ${progress === "over" ? "text-red-400" : progress === "behind" ? "text-amber-400" : "text-emerald-400"}`}>
               {progress === "over" ? "over target" : progress === "behind" ? "behind schedule" : "on track"}
             </span>
@@ -263,7 +261,7 @@ export function OffloadingTab() {
                 const startLabel = fmtHHLabel(config.startISO);
                 const endLabel = fmtHHLabel(new Date(new Date(config.startISO).getTime() + config.durationHrs * 3600_000).toISOString());
                 const forecastMW = rows[0]?.forecastMW ?? 0;
-                const text = `Coal offloading event — LYB reducing to ~${forecastMW.toFixed(0)} MW from HH ${startLabel} to ${endLabel}. Target ${totalMwhReduction(config).toFixed(0)} MWh reduction.`;
+                const text = `Coal offloading event — LYB reducing to ~${forecastMW.toFixed(0)} MW from HH ${startLabel} to ${endLabel}. Target ${config.mwReduction.toFixed(0)} MWh reduction.`;
                 void navigator.clipboard.writeText(text);
               }}
               className="ml-auto px-2 py-1 rounded border border-zinc-700 text-zinc-300 hover:bg-zinc-800 text-[11px]"
@@ -277,12 +275,71 @@ export function OffloadingTab() {
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({
+  label, children, className, tooltip,
+}: {
+  label: string;
+  children: React.ReactNode;
+  className?: string;
+  tooltip?: string;
+}) {
   return (
-    <label className="flex flex-col gap-1">
-      <span className="text-[10px] uppercase tracking-wide text-zinc-500">{label}</span>
+    <label className={`flex flex-col gap-1${className ? ` ${className}` : ""}`}>
+      <span className="text-[10px] uppercase tracking-wide text-zinc-500 flex items-center gap-1">
+        {label}
+        {tooltip && (
+          <span title={tooltip} className="cursor-help text-zinc-600 hover:text-zinc-400">
+            <Info className="h-3 w-3" />
+          </span>
+        )}
+      </span>
       {children}
     </label>
+  );
+}
+
+/** Three-select time picker: hour (1–12), minute (0/5/…/55), AM/PM. Value + onChange in "HH:MM" 24-hr. */
+function TimePicker({ value, onChange }: { value: string; onChange: (hhmm24: string) => void }) {
+  const [h24Str = "00", mStr = "00"] = value.split(":");
+  const h24 = Number(h24Str);
+  const m = Number(mStr);
+  const ampm: "AM" | "PM" = h24 >= 12 ? "PM" : "AM";
+  const h12 = ((h24 + 11) % 12) + 1;
+
+  const commit = (newH12: number, newM: number, newAmpm: "AM" | "PM") => {
+    const newH24 = newAmpm === "PM" ? ((newH12 % 12) + 12) : (newH12 % 12);
+    onChange(`${pad2(newH24)}:${pad2(newM)}`);
+  };
+
+  const triggerCls = "bg-zinc-950 border-zinc-700 text-zinc-200 font-mono h-8 px-2 min-w-0 w-14 text-xs";
+
+  return (
+    <div className="flex gap-1 items-center">
+      <Select value={String(h12)} onValueChange={(v) => commit(Number(v), m, ampm)}>
+        <SelectTrigger className={triggerCls}><SelectValue>{pad2(h12)}</SelectValue></SelectTrigger>
+        <SelectContent>
+          {Array.from({ length: 12 }, (_, i) => i + 1).map((h) => (
+            <SelectItem key={h} value={String(h)}>{pad2(h)}</SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <span className="text-zinc-500">:</span>
+      <Select value={String(m)} onValueChange={(v) => commit(h12, Number(v), ampm)}>
+        <SelectTrigger className={triggerCls}><SelectValue>{pad2(m)}</SelectValue></SelectTrigger>
+        <SelectContent>
+          {Array.from({ length: 12 }, (_, i) => i * 5).map((mm) => (
+            <SelectItem key={mm} value={String(mm)}>{pad2(mm)}</SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <Select value={ampm} onValueChange={(v) => commit(h12, m, v as "AM" | "PM")}>
+        <SelectTrigger className={triggerCls}><SelectValue>{ampm}</SelectValue></SelectTrigger>
+        <SelectContent>
+          <SelectItem value="AM">AM</SelectItem>
+          <SelectItem value="PM">PM</SelectItem>
+        </SelectContent>
+      </Select>
+    </div>
   );
 }
 
