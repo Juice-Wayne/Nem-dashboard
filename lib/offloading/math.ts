@@ -70,7 +70,9 @@ export function offloadRate(config: OffloadConfig): number {
   return config.mwReduction / config.durationHrs;
 }
 
-/** Build the base schedule — no actuals, no overrides. */
+/** Build the base schedule — no actuals, no overrides.
+ *  Row 0's hhEnding IS config.startISO (the first market HH of the event),
+ *  subsequent rows step forward in 30-min increments. */
 export function buildSchedule(config: OffloadConfig): ScheduleRow[] {
   const rows: ScheduleRow[] = [];
   const start = new Date(config.startISO).getTime();
@@ -79,7 +81,7 @@ export function buildSchedule(config: OffloadConfig): ScheduleRow[] {
   const lyb1Target = Math.max(0, config.lyb1Cap - rate / 2);
   const lyb2Target = Math.max(0, config.lyb2Cap - rate / 2);
   for (let i = 0; i < rowCount(config); i++) {
-    const hhEndMs = start + (i + 1) * 30 * 60 * 1000;
+    const hhEndMs = start + i * 30 * 60 * 1000;
     rows.push({
       hhEnding: new Date(hhEndMs).toISOString(),
       targetOffloadMW: rate,

@@ -27,7 +27,7 @@ function enumerateHHs(startISO: string, durationHrs: number): string[] {
   const start = new Date(startISO).getTime();
   const rows = Math.round(durationHrs * 2);
   for (let i = 0; i < rows; i++) {
-    out.push(new Date(start + (i + 1) * 30 * 60 * 1000).toISOString());
+    out.push(new Date(start + i * 30 * 60 * 1000).toISOString());
   }
   return out;
 }
