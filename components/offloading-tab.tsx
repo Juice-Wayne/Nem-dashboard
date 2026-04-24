@@ -167,7 +167,7 @@ export function OffloadingTab() {
               />
             </Field>
             <Field label="Duration (hrs)">
-              <NumInput value={config.durationHrs} onChange={(v) => update("durationHrs", v)} min={1} max={24} />
+              <NumInput value={config.durationHrs} onChange={(v) => update("durationHrs", v)} min={1} max={99} maxDigits={2} />
             </Field>
             <Field label="MWh reduction">
               <NumInput value={config.mwhReduction} onChange={(v) => update("mwhReduction", v)} min={0} />
@@ -279,15 +279,46 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-function NumInput({ value, onChange, min, max }: { value: number; onChange: (v: number) => void; min?: number; max?: number }) {
+function NumInput({
+  value, onChange, min, max, maxDigits,
+}: {
+  value: number;
+  onChange: (v: number) => void;
+  min?: number;
+  max?: number;
+  /** Cap the number of digits a user can type. Useful for short fields (e.g. duration ≤ 99). */
+  maxDigits?: number;
+}) {
+  // Local string lets the user blank the field while typing; parent only sees valid numbers.
+  const [local, setLocal] = useState<string>(String(value));
+
+  // Reflect external changes to `value` unless the user is mid-edit with an equivalent number.
+  useEffect(() => {
+    if (local === "" || Number(local) !== value) setLocal(String(value));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value]);
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const raw = e.target.value;
+    if (raw !== "" && !/^\d*\.?\d*$/.test(raw)) return;
+    if (maxDigits && raw.replace(/\D/g, "").length > maxDigits) return;
+    setLocal(raw);
+    if (raw === "") return;  // blank display; don't commit a value
+    const n = Number(raw);
+    if (Number.isFinite(n)) onChange(n);
+  };
+
+  const handleBlur = () => {
+    if (local === "") setLocal(String(value));
+  };
+
   return (
     <input
-      type="number"
-      value={value}
-      onChange={(e) => {
-        const n = Number(e.target.value);
-        if (!Number.isNaN(n)) onChange(n);
-      }}
+      type="text"
+      inputMode="numeric"
+      value={local}
+      onChange={handleChange}
+      onBlur={handleBlur}
       min={min}
       max={max}
       className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-zinc-200 font-mono w-full"
