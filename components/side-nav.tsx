@@ -23,7 +23,6 @@ export type NavTabId =
   | "sensitivities"
   | "actuals"
   | "market-nem"
-  | "market-wem"
   | "spikes"
   | "startcost"
   | "braemar"
@@ -61,7 +60,6 @@ const SECTIONS: NavSection[] = [
     label: "Market",
     items: [
       { id: "market-nem", label: "NEM Market Summary", letter: "N" },
-      { id: "market-wem", label: "WEM Market Summary", letter: "W" },
       { id: "spikes", label: "Spikes", icon: AlertTriangle },
     ],
   },
