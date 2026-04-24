@@ -7,7 +7,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Info, Copy, Check } from "lucide-react";
 import {
-  applyActuals, buildSchedule, offloadRate, totalCap, progressState,
+  applyActuals, buildSchedule, offloadRate, totalCap,
   type OffloadConfig, type ActualsByHH, type OverridesByHH, type RowOverrides,
 } from "@/lib/offloading/math";
 
@@ -171,9 +171,6 @@ export function OffloadingTab() {
     });
   };
 
-  const cumTotal = rows[rows.length - 1]?.cumMWh ?? 0;
-  const progress = progressState(rows, config);
-
   const update = <K extends keyof OffloadConfig>(key: K, value: OffloadConfig[K]) =>
     setConfig((prev) => ({ ...prev, [key]: value }));
 
@@ -319,21 +316,6 @@ export function OffloadingTab() {
                 })}
               </TableBody>
             </Table>
-          </div>
-          <div className="px-3 pt-3">
-            <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden">
-              <div
-                className={`h-full rounded-full transition-all ${progress === "over" ? "bg-red-500" : progress === "behind" ? "bg-amber-500" : "bg-emerald-500"}`}
-                style={{ width: `${Math.min((cumTotal / Math.max(config.mwReduction, 1)) * 100, 100).toFixed(1)}%` }}
-              />
-            </div>
-          </div>
-          <div className="p-3 text-xs flex items-center gap-3">
-            <span className="text-zinc-400">Cumulative:</span>
-            <span className="font-mono text-zinc-100">{cumTotal.toFixed(1)} / {config.mwReduction.toFixed(0)} MWh</span>
-            <span className={`text-[11px] ${progress === "over" ? "text-red-400" : progress === "behind" ? "text-amber-400" : "text-emerald-400"}`}>
-              {progress === "over" ? "over target" : progress === "behind" ? "behind schedule" : "on track"}
-            </span>
           </div>
         </CardContent>
       </Card>
