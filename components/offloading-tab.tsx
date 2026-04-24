@@ -520,6 +520,7 @@ function EditableCell({
       {editing ? (
         <input
           autoFocus
+          size={1}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onBlur={commit}
@@ -535,7 +536,7 @@ function EditableCell({
               setEditing(false);
             }
           }}
-          className="w-full bg-zinc-950 border border-blue-500 rounded px-1 py-0 text-right font-mono text-xs text-zinc-100 outline-none"
+          className="w-full min-w-0 bg-zinc-950 border border-blue-500 rounded px-1 py-0 text-right font-mono text-xs text-zinc-100 outline-none"
         />
       ) : (
         <>
