@@ -5,12 +5,17 @@ export interface OffloadConfig {
   startISO: string;
   /** Event length in hours (integer, 4–12). */
   durationHrs: number;
-  /** Target cumulative MWh reduction for the whole event. */
-  mwhReduction: number;
+  /** Target MW reduction held constant each HH across the event (station-total, not per-unit). */
+  mwReduction: number;
   /** Unit 1 registered capacity in MW. */
   lyb1Cap: number;
   /** Unit 2 registered capacity in MW. */
   lyb2Cap: number;
+}
+
+/** Derived: total MWh reduction over the full event = MW × duration. */
+export function totalMwhReduction(config: OffloadConfig): number {
+  return config.mwReduction * config.durationHrs;
 }
 
 /** One half-hour row in the offloading table. */
@@ -49,9 +54,9 @@ export function totalCap(config: OffloadConfig): number {
   return config.lyb1Cap + config.lyb2Cap;
 }
 
-/** Constant offload rate in MW per half-hour (same number for every row). */
+/** Constant offload rate in MW (same number held for every HH of the event). */
 export function offloadRate(config: OffloadConfig): number {
-  return config.mwhReduction / config.durationHrs;
+  return config.mwReduction;
 }
 
 /**
@@ -135,12 +140,13 @@ export type ProgressState = "onTrack" | "behind" | "over";
 
 export function progressState(rows: ComputedRow[], config: OffloadConfig, nowMs = Date.now()): ProgressState {
   const cumTotal = rows[rows.length - 1]?.cumMWh ?? 0;
-  if (cumTotal > config.mwhReduction * 1.1) return "over";
+  const targetTotal = totalMwhReduction(config);
+  if (cumTotal > targetTotal * 1.1) return "over";
   // Linear target: expected MWh by this point in time.
   const startMs = new Date(config.startISO).getTime();
   const elapsedHrs = Math.max(0, (nowMs - startMs) / 3_600_000);
-  if (elapsedHrs >= config.durationHrs) return cumTotal >= config.mwhReduction * 0.9 ? "onTrack" : "behind";
-  const target = (config.mwhReduction / config.durationHrs) * elapsedHrs;
+  if (elapsedHrs >= config.durationHrs) return cumTotal >= targetTotal * 0.9 ? "onTrack" : "behind";
+  const target = config.mwReduction * elapsedHrs;
   if (cumTotal < target * 0.9) return "behind";
   return "onTrack";
 }

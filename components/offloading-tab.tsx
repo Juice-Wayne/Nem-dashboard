@@ -5,7 +5,7 @@ import useSWR from "swr";
 import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
-  applyActuals, buildSchedule, offloadRate, totalCap, progressState,
+  applyActuals, buildSchedule, offloadRate, totalCap, totalMwhReduction, progressState,
   type OffloadConfig, type ActualsByHH, type OverridesByHH,
 } from "@/lib/offloading/math";
 
@@ -14,7 +14,7 @@ const STORAGE_KEY = "nem-offloading-config";
 const DEFAULTS: OffloadConfig = {
   startISO: nextHalfHourISO(),
   durationHrs: 4,
-  mwhReduction: 1600,
+  mwReduction: 400,
   lyb1Cap: 585,
   lyb2Cap: 585,
 };
@@ -31,7 +31,13 @@ function loadConfig(): OffloadConfig {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return DEFAULTS;
-    return { ...DEFAULTS, ...JSON.parse(raw) } as OffloadConfig;
+    const parsed = JSON.parse(raw) as Partial<OffloadConfig> & { mwhReduction?: number };
+    // Migrate legacy `mwhReduction` (total MWh over event) → `mwReduction` (constant MW per HH).
+    if (parsed.mwReduction == null && parsed.mwhReduction != null) {
+      parsed.mwReduction = parsed.mwhReduction / (parsed.durationHrs || 4);
+      delete parsed.mwhReduction;
+    }
+    return { ...DEFAULTS, ...parsed } as OffloadConfig;
   } catch { return DEFAULTS; }
 }
 
@@ -169,8 +175,8 @@ export function OffloadingTab() {
             <Field label="Duration (hrs)">
               <NumInput value={config.durationHrs} onChange={(v) => update("durationHrs", v)} min={1} max={99} maxDigits={2} />
             </Field>
-            <Field label="MWh reduction">
-              <NumInput value={config.mwhReduction} onChange={(v) => update("mwhReduction", v)} min={0} />
+            <Field label="Total MW reduction">
+              <NumInput value={config.mwReduction} onChange={(v) => update("mwReduction", v)} min={0} />
             </Field>
             <Field label="LYB1 capacity (MW)">
               <NumInput value={config.lyb1Cap} onChange={(v) => update("lyb1Cap", v)} min={0} />
@@ -181,6 +187,7 @@ export function OffloadingTab() {
           </div>
           <div className="text-[11px] text-zinc-400 flex gap-6">
             <span>Offload rate: <span className="text-zinc-200 font-mono">{offloadRate(config).toFixed(1)} MW/hh</span></span>
+            <span>MWh total: <span className="text-zinc-200 font-mono">{totalMwhReduction(config).toFixed(0)} MWh</span></span>
             <span>Total capacity: <span className="text-zinc-200 font-mono">{totalCap(config)} MW</span></span>
           </div>
         </CardContent>
@@ -241,13 +248,13 @@ export function OffloadingTab() {
             <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden">
               <div
                 className={`h-full rounded-full transition-all ${progress === "over" ? "bg-red-500" : progress === "behind" ? "bg-amber-500" : "bg-emerald-500"}`}
-                style={{ width: `${Math.min((cumTotal / Math.max(config.mwhReduction, 1)) * 100, 100).toFixed(1)}%` }}
+                style={{ width: `${Math.min((cumTotal / Math.max(totalMwhReduction(config), 1)) * 100, 100).toFixed(1)}%` }}
               />
             </div>
           </div>
           <div className="p-3 text-xs flex items-center gap-3">
             <span className="text-zinc-400">Cumulative:</span>
-            <span className="font-mono text-zinc-100">{cumTotal.toFixed(1)} / {config.mwhReduction} MWh</span>
+            <span className="font-mono text-zinc-100">{cumTotal.toFixed(1)} / {totalMwhReduction(config).toFixed(0)} MWh</span>
             <span className={`text-[11px] ${progress === "over" ? "text-red-400" : progress === "behind" ? "text-amber-400" : "text-emerald-400"}`}>
               {progress === "over" ? "over target" : progress === "behind" ? "behind schedule" : "on track"}
             </span>
@@ -256,7 +263,7 @@ export function OffloadingTab() {
                 const startLabel = fmtHHLabel(config.startISO);
                 const endLabel = fmtHHLabel(new Date(new Date(config.startISO).getTime() + config.durationHrs * 3600_000).toISOString());
                 const forecastMW = rows[0]?.forecastMW ?? 0;
-                const text = `Coal offloading event — LYB reducing to ~${forecastMW.toFixed(0)} MW from HH ${startLabel} to ${endLabel}. Target ${config.mwhReduction} MWh reduction.`;
+                const text = `Coal offloading event — LYB reducing to ~${forecastMW.toFixed(0)} MW from HH ${startLabel} to ${endLabel}. Target ${totalMwhReduction(config).toFixed(0)} MWh reduction.`;
                 void navigator.clipboard.writeText(text);
               }}
               className="ml-auto px-2 py-1 rounded border border-zinc-700 text-zinc-300 hover:bg-zinc-800 text-[11px]"
