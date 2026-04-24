@@ -67,7 +67,7 @@ const SECTIONS: NavSection[] = [
     id: "tools",
     label: "Tools",
     items: [
-      { id: "startcost", label: "Braemar Start", icon: Flag, gated: true },
+      { id: "startcost", label: "Braemar Start", icon: Flag },
       { id: "braemar", label: "Braemar Revenue", icon: Factory, gated: true },
       { id: "bdl", label: "BDL Revenue", icon: Factory, gated: true },
     ],

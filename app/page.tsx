@@ -619,7 +619,7 @@ export default function HomePage() {
 
         {/* === BRAEMAR START TAB (password-gated) === */}
         <TabsContent value="startcost">
-          {powerUnlocked ? <StartCostTab /> : <PowerGate onUnlock={() => setPowerUnlocked(true)} />}
+          <StartCostTab />
         </TabsContent>
 
         {/* === MARKET ANALYSIS TAB === */}
@@ -1675,8 +1675,8 @@ const BR_DEFAULTS = {
   gasCostGJ: 11.5,
   startCost: 35000,
   loadMW: 170,
-  heatRate: 10.4,
-  rampRate: 11,
+  heatRate: 0,
+  rampRate: 0,
 };
 
 function ConfigInput({ label, unit, value, onChange, width }: { label: string; unit: string; value: string | number; onChange: (v: string) => void; width?: string }) {
