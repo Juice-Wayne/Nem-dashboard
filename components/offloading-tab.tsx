@@ -5,13 +5,17 @@ import useSWR from "swr";
 import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Info } from "lucide-react";
+import { Info, Copy, Check } from "lucide-react";
 import {
   applyActuals, buildSchedule, offloadRate, totalCap, progressState,
-  type OffloadConfig, type ActualsByHH, type OverridesByHH,
+  type OffloadConfig, type ActualsByHH, type OverridesByHH, type RowOverrides,
 } from "@/lib/offloading/math";
 
 const STORAGE_KEY = "nem-offloading-config";
+
+/** Shared input styling so Date / Time / Number inputs line up visually. */
+const INPUT_CLS =
+  "bg-zinc-950 border border-zinc-700 rounded h-8 px-2 text-zinc-200 font-mono text-xs w-full outline-none focus:border-zinc-500";
 
 const DEFAULTS: OffloadConfig = {
   startISO: nextHalfHourISO(),
@@ -20,6 +24,10 @@ const DEFAULTS: OffloadConfig = {
   lyb1Cap: 585,
   lyb2Cap: 585,
 };
+
+// Editable per-row fields users can override or paste-fill.
+type OverrideField = "lyb1Actual" | "lyb2Actual" | "lyb1Gas" | "lyb2Gas";
+const OVERRIDE_FIELDS: OverrideField[] = ["lyb1Actual", "lyb1Gas", "lyb2Actual", "lyb2Gas"];
 
 function nextHalfHourISO(): string {
   const now = new Date();
@@ -34,7 +42,6 @@ function loadConfig(): OffloadConfig {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return DEFAULTS;
     const parsed = JSON.parse(raw) as Partial<OffloadConfig> & { mwhReduction?: number };
-    // Migrate legacy `mwhReduction` → `mwReduction` (same semantics: total reduction across event).
     if (parsed.mwReduction == null && parsed.mwhReduction != null) {
       parsed.mwReduction = parsed.mwhReduction;
       delete parsed.mwhReduction;
@@ -52,8 +59,18 @@ function fmtMW(v: number | null): string {
   return v.toFixed(1);
 }
 
+function fmtSignedMWh(v: number): string {
+  if (!Number.isFinite(v)) return "—";
+  return v.toFixed(1);
+}
+
 function fmtHHLabel(iso: string): string {
-  // Local HH:MM in the user's timezone — "14:30"
+  const d = new Date(iso);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${String(d.getFullYear()).slice(2)} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function fmtTimeOnly(iso: string): string {
   return new Date(iso).toLocaleTimeString("en-AU", { hour: "2-digit", minute: "2-digit", hour12: false });
 }
 
@@ -70,9 +87,6 @@ export function OffloadingTab() {
   const [config, setConfig] = useState<OffloadConfig>(DEFAULTS);
   const [hydrated, setHydrated] = useState(false);
 
-  // On mount: hydrate from localStorage but always reset the DATE portion of startISO
-  // to today. Events are almost always same-day; a user who wants a historical date
-  // can still change it — that change just won't persist to the next session.
   useEffect(() => {
     const loaded = loadConfig();
     loaded.startISO = withDate(loaded.startISO, todayDateStr());
@@ -92,11 +106,11 @@ export function OffloadingTab() {
   const schedule = useMemo(() => buildSchedule(config), [config]);
 
   const actuals: ActualsByHH = useMemo(() => {
-    const map = new Map<string, number>();
+    const map = new Map<string, { lyb1: number; lyb2: number }>();
     if (!data) return map;
     for (const iv of data.intervals) {
       if (iv.lyb1Mw != null && iv.lyb2Mw != null) {
-        map.set(iv.hhEnding, iv.lyb1Mw + iv.lyb2Mw);
+        map.set(iv.hhEnding, { lyb1: iv.lyb1Mw, lyb2: iv.lyb2Mw });
       }
     }
     return map;
@@ -104,10 +118,10 @@ export function OffloadingTab() {
 
   const [overridesMap, setOverridesMap] = useState<OverridesByHH>(() => new Map());
 
-  const setOverride = (hhEnding: string, field: "lyb1TargetMW" | "lyb2TargetMW" | "actualMW", value: number | undefined) => {
+  const setOverride = (hhEnding: string, field: OverrideField, value: number | undefined) => {
     setOverridesMap((prev) => {
       const next = new Map(prev);
-      const row = { ...(next.get(hhEnding) ?? {}) };
+      const row: RowOverrides = { ...(next.get(hhEnding) ?? {}) };
       if (value === undefined) delete row[field];
       else row[field] = value;
       if (Object.keys(row).length === 0) next.delete(hhEnding);
@@ -121,11 +135,9 @@ export function OffloadingTab() {
     [schedule, actuals, overridesMap, config],
   );
 
-  /** Paste handler — parses clipboard text as tab/newline rows and fills cells starting at (rowIdx, field). */
-  const handlePaste = (rowIdx: number, field: "lyb1TargetMW" | "lyb2TargetMW" | "actualMW", text: string) => {
+  const handlePaste = (rowIdx: number, field: OverrideField, text: string) => {
     const lines = text.replace(/\r/g, "").split("\n").filter((l) => l.length);
-    const fields: Array<"lyb1TargetMW" | "lyb2TargetMW" | "actualMW"> = ["lyb1TargetMW", "lyb2TargetMW", "actualMW"];
-    const startColIdx = fields.indexOf(field);
+    const startColIdx = OVERRIDE_FIELDS.indexOf(field);
     setOverridesMap((prev) => {
       const next = new Map(prev);
       lines.forEach((line, lineIdx) => {
@@ -134,10 +146,10 @@ export function OffloadingTab() {
           const n = Number(raw);
           if (!Number.isFinite(n)) return;
           const targetRowIdx = rowIdx + lineIdx;
-          const targetField = fields[startColIdx + colIdx];
+          const targetField = OVERRIDE_FIELDS[startColIdx + colIdx];
           const targetRow = rows[targetRowIdx];
           if (!targetRow || !targetField) return;
-          const existing = { ...(next.get(targetRow.hhEnding) ?? {}) };
+          const existing: RowOverrides = { ...(next.get(targetRow.hhEnding) ?? {}) };
           existing[targetField] = n;
           next.set(targetRow.hhEnding, existing);
         });
@@ -152,20 +164,31 @@ export function OffloadingTab() {
   const update = <K extends keyof OffloadConfig>(key: K, value: OffloadConfig[K]) =>
     setConfig((prev) => ({ ...prev, [key]: value }));
 
+  // Summary text shown at top + copied to clipboard.
+  const summaryText = useMemo(() => {
+    const startLabel = fmtTimeOnly(config.startISO);
+    const endISO = new Date(new Date(config.startISO).getTime() + config.durationHrs * 3600_000).toISOString();
+    const endLabel = fmtTimeOnly(endISO);
+    const forecastMW = rows[0]?.forecastMW ?? 0;
+    return `Coal offloading event — LYB reducing to ~${forecastMW.toFixed(0)} MW from HH ${startLabel} to ${endLabel}. Target ${config.mwReduction.toFixed(0)} MWh reduction.`;
+  }, [config, rows]);
+
   return (
     <div className="space-y-4">
+      <SummaryCard text={summaryText} />
+
       <Card className="bg-zinc-900/60 border-white/5">
-        <CardContent className="p-4 space-y-3">
-          <div className="grid grid-cols-2 md:grid-cols-6 gap-3 text-xs">
+        <CardContent className="p-3 space-y-2">
+          <div className="grid grid-cols-2 md:grid-cols-7 gap-2 text-xs">
             <Field label="Start date">
               <input
                 type="date"
                 value={toDateInput(config.startISO)}
                 onChange={(e) => update("startISO", withDate(config.startISO, e.target.value))}
-                className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-zinc-200 font-mono w-full"
+                className={INPUT_CLS}
               />
             </Field>
-            <Field label="Start time">
+            <Field label="Start time" className="md:col-span-2">
               <TimePicker
                 value={toTimeInput(config.startISO)}
                 onChange={(hhmm24) => update("startISO", withTime(config.startISO, hhmm24))}
@@ -193,55 +216,89 @@ export function OffloadingTab() {
 
       <Card className="bg-zinc-900/60 border-white/5">
         <CardContent className="p-0">
-          <Table>
-            <TableHeader>
-              <TableRow className="border-white/5">
-                <TableHead>HH ending</TableHead>
-                <TableHead className="text-right">Target offload</TableHead>
-                <TableHead className="text-right">LYB1 target</TableHead>
-                <TableHead className="text-right">LYB2 target</TableHead>
-                <TableHead className="text-right">Forecast</TableHead>
-                <TableHead className="text-right">Actual</TableHead>
-                <TableHead className="text-right">MW Loss</TableHead>
-                <TableHead className="text-right">MWh / HH</TableHead>
-                <TableHead className="text-right">Cum MWh</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {rows.map((r, rowIdx) => (
-                <TableRow key={r.hhEnding} className="border-white/5 font-mono text-xs">
-                  <TableCell>{fmtHHLabel(r.hhEnding)}</TableCell>
-                  <TableCell className="text-right">{fmtMW(r.targetOffloadMW)}</TableCell>
-                  <EditableCell
-                    value={r.lyb1TargetMW}
-                    isOverride={r.overridden.lyb1TargetMW}
-                    onCommit={(v) => setOverride(r.hhEnding, "lyb1TargetMW", v)}
-                    onRevert={() => setOverride(r.hhEnding, "lyb1TargetMW", undefined)}
-                    onPaste={(text) => handlePaste(rowIdx, "lyb1TargetMW", text)}
-                  />
-                  <EditableCell
-                    value={r.lyb2TargetMW}
-                    isOverride={r.overridden.lyb2TargetMW}
-                    onCommit={(v) => setOverride(r.hhEnding, "lyb2TargetMW", v)}
-                    onRevert={() => setOverride(r.hhEnding, "lyb2TargetMW", undefined)}
-                    onPaste={(text) => handlePaste(rowIdx, "lyb2TargetMW", text)}
-                  />
-                  <TableCell className="text-right">{fmtMW(r.forecastMW)}</TableCell>
-                  <EditableCell
-                    value={r.actualMW ?? r.forecastMW}
-                    isOverride={r.overridden.actualMW}
-                    isFallback={r.actualMW == null}
-                    onCommit={(v) => setOverride(r.hhEnding, "actualMW", v)}
-                    onRevert={() => setOverride(r.hhEnding, "actualMW", undefined)}
-                    onPaste={(text) => handlePaste(rowIdx, "actualMW", text)}
-                  />
-                  <TableCell className="text-right">{fmtMW(r.mwLoss)}</TableCell>
-                  <TableCell className="text-right">{fmtMW(r.mwhThisHH)}</TableCell>
-                  <TableCell className="text-right">{fmtMW(r.cumMWh)}</TableCell>
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow className="border-white/5">
+                  <TableHead className="whitespace-nowrap">HH ending<br/><span className="text-[9px] font-normal text-zinc-500">Market Time</span></TableHead>
+                  <TableHead className="text-right whitespace-nowrap">Target MW<br/><span className="text-[9px] font-normal text-zinc-500">/ hh</span></TableHead>
+                  <TableHead className="text-right whitespace-nowrap">Target<br/><span className="text-[9px] font-normal text-zinc-500">Offload MWh</span></TableHead>
+                  <TableHead className="text-right whitespace-nowrap">Forecast<br/><span className="text-[9px] font-normal text-zinc-500">MW</span></TableHead>
+                  <TableHead className="text-right whitespace-nowrap">Actual<br/><span className="text-[9px] font-normal text-zinc-500">MW</span></TableHead>
+                  <TableHead className="text-right whitespace-nowrap">MW Loss</TableHead>
+                  <TableHead className="text-right whitespace-nowrap">Act Offload<br/><span className="text-[9px] font-normal text-zinc-500">MWh</span></TableHead>
+                  <TableHead className="text-right whitespace-nowrap">Cum MWh<br/><span className="text-[9px] font-normal text-zinc-500">Loss</span></TableHead>
+                  <TableHead className="text-right whitespace-nowrap border-l border-white/10">LYB1<br/><span className="text-[9px] font-normal text-zinc-500">Bid target</span></TableHead>
+                  <TableHead className="text-right whitespace-nowrap">LYB2<br/><span className="text-[9px] font-normal text-zinc-500">Bid target</span></TableHead>
+                  <TableHead className="text-right whitespace-nowrap">Total<br/><span className="text-[9px] font-normal text-zinc-500">bid</span></TableHead>
+                  <TableHead className="text-right whitespace-nowrap border-l border-white/10">LYB1<br/><span className="text-[9px] font-normal text-zinc-500">actual</span></TableHead>
+                  <TableHead className="text-right whitespace-nowrap">Less gas<br/><span className="text-[9px] font-normal text-zinc-500">LYB1</span></TableHead>
+                  <TableHead className="text-right whitespace-nowrap">LYB2<br/><span className="text-[9px] font-normal text-zinc-500">actual</span></TableHead>
+                  <TableHead className="text-right whitespace-nowrap">Less gas<br/><span className="text-[9px] font-normal text-zinc-500">LYB2</span></TableHead>
+                  <TableHead className="text-right whitespace-nowrap">Total<br/><span className="text-[9px] font-normal text-zinc-500">actual</span></TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+              </TableHeader>
+              <TableBody>
+                {rows.map((r, rowIdx) => {
+                  const bidTotal = r.lyb1TargetMW + r.lyb2TargetMW;
+                  // Display fallback: when no unit actual yet, show forecast split so the row reads sensibly.
+                  const lyb1Display = r.lyb1Actual ?? r.lyb1TargetMW;
+                  const lyb2Display = r.lyb2Actual ?? r.lyb2TargetMW;
+                  return (
+                    <TableRow key={r.hhEnding} className="border-white/5 font-mono text-xs">
+                      <TableCell className="whitespace-nowrap">{fmtHHLabel(r.hhEnding)}</TableCell>
+                      <TableCell className="text-right">{fmtMW(r.targetOffloadMW)}</TableCell>
+                      <TableCell className="text-right text-zinc-400">{fmtSignedMWh(r.targetCumMWh)}</TableCell>
+                      <TableCell className="text-right">{fmtMW(r.forecastMW)}</TableCell>
+                      <TableCell className={`text-right ${r.totalActualMW == null ? "italic text-zinc-500" : ""}`}>
+                        {fmtMW(r.totalActualMW ?? r.forecastMW)}
+                      </TableCell>
+                      <TableCell className="text-right">{fmtMW(r.mwLoss)}</TableCell>
+                      <TableCell className="text-right">{fmtMW(r.mwhThisHH)}</TableCell>
+                      <TableCell className="text-right">{fmtMW(r.cumMWh)}</TableCell>
+                      <TableCell className="text-right border-l border-white/10">{fmtMW(r.lyb1TargetMW)}</TableCell>
+                      <TableCell className="text-right">{fmtMW(r.lyb2TargetMW)}</TableCell>
+                      <TableCell className="text-right">{fmtMW(bidTotal)}</TableCell>
+                      <EditableCell
+                        className="border-l border-white/10"
+                        value={lyb1Display}
+                        isOverride={r.overridden.lyb1Actual}
+                        isFallback={r.lyb1Actual == null}
+                        onCommit={(v) => setOverride(r.hhEnding, "lyb1Actual", v)}
+                        onRevert={() => setOverride(r.hhEnding, "lyb1Actual", undefined)}
+                        onPaste={(text) => handlePaste(rowIdx, "lyb1Actual", text)}
+                      />
+                      <EditableCell
+                        value={r.lyb1Gas}
+                        isOverride={r.overridden.lyb1Gas}
+                        onCommit={(v) => setOverride(r.hhEnding, "lyb1Gas", v)}
+                        onRevert={() => setOverride(r.hhEnding, "lyb1Gas", undefined)}
+                        onPaste={(text) => handlePaste(rowIdx, "lyb1Gas", text)}
+                      />
+                      <EditableCell
+                        value={lyb2Display}
+                        isOverride={r.overridden.lyb2Actual}
+                        isFallback={r.lyb2Actual == null}
+                        onCommit={(v) => setOverride(r.hhEnding, "lyb2Actual", v)}
+                        onRevert={() => setOverride(r.hhEnding, "lyb2Actual", undefined)}
+                        onPaste={(text) => handlePaste(rowIdx, "lyb2Actual", text)}
+                      />
+                      <EditableCell
+                        value={r.lyb2Gas}
+                        isOverride={r.overridden.lyb2Gas}
+                        onCommit={(v) => setOverride(r.hhEnding, "lyb2Gas", v)}
+                        onRevert={() => setOverride(r.hhEnding, "lyb2Gas", undefined)}
+                        onPaste={(text) => handlePaste(rowIdx, "lyb2Gas", text)}
+                      />
+                      <TableCell className={`text-right font-medium ${r.totalActualMW == null ? "italic text-zinc-500" : "text-zinc-100"}`}>
+                        {fmtMW(r.totalActualMW ?? r.forecastMW)}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </div>
           <div className="px-3 pt-3">
             <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden">
               <div
@@ -256,22 +313,41 @@ export function OffloadingTab() {
             <span className={`text-[11px] ${progress === "over" ? "text-red-400" : progress === "behind" ? "text-amber-400" : "text-emerald-400"}`}>
               {progress === "over" ? "over target" : progress === "behind" ? "behind schedule" : "on track"}
             </span>
-            <button
-              onClick={() => {
-                const startLabel = fmtHHLabel(config.startISO);
-                const endLabel = fmtHHLabel(new Date(new Date(config.startISO).getTime() + config.durationHrs * 3600_000).toISOString());
-                const forecastMW = rows[0]?.forecastMW ?? 0;
-                const text = `Coal offloading event — LYB reducing to ~${forecastMW.toFixed(0)} MW from HH ${startLabel} to ${endLabel}. Target ${config.mwReduction.toFixed(0)} MWh reduction.`;
-                void navigator.clipboard.writeText(text);
-              }}
-              className="ml-auto px-2 py-1 rounded border border-zinc-700 text-zinc-300 hover:bg-zinc-800 text-[11px]"
-            >
-              Copy summary
-            </button>
           </div>
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+function SummaryCard({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const copy = () => {
+    void navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    });
+  };
+
+  return (
+    <Card className="bg-zinc-900/60 border-white/5">
+      <CardContent className="p-3 flex items-start gap-3">
+        <div className="text-[10px] uppercase tracking-wide text-zinc-500 pt-[3px] whitespace-nowrap">AEMO summary</div>
+        <div className="flex-1 text-xs font-mono text-zinc-200 leading-5 select-all">{text}</div>
+        <button
+          onClick={copy}
+          className={`shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] font-medium transition-colors ${
+            copied
+              ? "bg-emerald-500/15 border border-emerald-500/40 text-emerald-300"
+              : "bg-zinc-800 border border-zinc-700 text-zinc-200 hover:bg-zinc-700"
+          }`}
+          title="Copy to clipboard"
+        >
+          {copied ? (<><Check className="h-3.5 w-3.5" /> Copied</>) : (<><Copy className="h-3.5 w-3.5" /> Copy</>)}
+        </button>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -311,7 +387,7 @@ function TimePicker({ value, onChange }: { value: string; onChange: (hhmm24: str
     onChange(`${pad2(newH24)}:${pad2(newM)}`);
   };
 
-  const triggerCls = "bg-zinc-950 border-zinc-700 text-zinc-200 font-mono h-8 px-2 min-w-0 w-14 text-xs";
+  const triggerCls = "bg-zinc-950 border border-zinc-700 rounded h-8 px-2 text-zinc-200 font-mono text-xs min-w-0 w-full";
 
   return (
     <div className="flex gap-1 items-center">
@@ -350,13 +426,10 @@ function NumInput({
   onChange: (v: number) => void;
   min?: number;
   max?: number;
-  /** Cap the number of digits a user can type. Useful for short fields (e.g. duration ≤ 99). */
   maxDigits?: number;
 }) {
-  // Local string lets the user blank the field while typing; parent only sees valid numbers.
   const [local, setLocal] = useState<string>(String(value));
 
-  // Reflect external changes to `value` unless the user is mid-edit with an equivalent number.
   useEffect(() => {
     if (local === "" || Number(local) !== value) setLocal(String(value));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -367,7 +440,7 @@ function NumInput({
     if (raw !== "" && !/^\d*\.?\d*$/.test(raw)) return;
     if (maxDigits && raw.replace(/\D/g, "").length > maxDigits) return;
     setLocal(raw);
-    if (raw === "") return;  // blank display; don't commit a value
+    if (raw === "") return;
     const n = Number(raw);
     if (Number.isFinite(n)) onChange(n);
   };
@@ -385,49 +458,43 @@ function NumInput({
       onBlur={handleBlur}
       min={min}
       max={max}
-      className="bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-zinc-200 font-mono w-full"
+      className={INPUT_CLS}
     />
   );
 }
 
 function pad2(n: number): string { return String(n).padStart(2, "0"); }
 
-/** Today's date in the user's local timezone, as "YYYY-MM-DD". */
 function todayDateStr(): string {
   const d = new Date();
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 }
 
-/** ISO → "YYYY-MM-DD" (local date) for a date input. */
 function toDateInput(iso: string): string {
   const d = new Date(iso);
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 }
 
-/** ISO → "HH:MM" (local time) for a time input. */
 function toTimeInput(iso: string): string {
   const d = new Date(iso);
   return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
 }
 
-/** Replace the date portion of an ISO (keeping local time-of-day) and return a new UTC ISO. */
 function withDate(iso: string, dateStr: string): string {
   return new Date(`${dateStr}T${toTimeInput(iso)}`).toISOString();
 }
 
-/** Replace the time portion of an ISO (keeping local date) and return a new UTC ISO. */
 function withTime(iso: string, timeStr: string): string {
   return new Date(`${toDateInput(iso)}T${timeStr}`).toISOString();
 }
 
 function EditableCell({
-  value, isOverride, isFallback = false, onCommit, onRevert, onPaste,
+  value, isOverride, isFallback = false, className, onCommit, onRevert, onPaste,
 }: {
   value: number | null;
   isOverride: boolean;
-  /** When true, the displayed value is a forecast stand-in (not a confirmed measurement).
-   *  Renders italic/muted so the user can tell it's not real data yet and click to enter one. */
   isFallback?: boolean;
+  className?: string;
   onCommit: (v: number) => void;
   onRevert: () => void;
   onPaste: (text: string) => void;
@@ -447,7 +514,7 @@ function EditableCell({
 
   return (
     <TableCell
-      className={`text-right relative cursor-text ${isOverride ? "border-l-2 border-l-blue-500" : ""}`}
+      className={`text-right relative cursor-text ${isOverride ? "border-l-2 border-l-blue-500" : ""} ${className ?? ""}`}
       onClick={(e) => { if (!editing) { e.stopPropagation(); startEdit(); } }}
     >
       {editing ? (

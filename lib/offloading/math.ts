@@ -16,27 +16,43 @@ export interface OffloadConfig {
 /** One half-hour row in the offloading table. */
 export interface ScheduleRow {
   hhEnding: string;           // ISO timestamp
-  targetOffloadMW: number;    // constant MWh_reduction / durationHrs
-  lyb1TargetMW: number;       // lyb1Cap - targetOffload/2 (editable by user)
-  lyb2TargetMW: number;       // lyb2Cap - targetOffload/2 (editable by user)
+  targetOffloadMW: number;    // constant MW per HH (mwReduction / durationHrs)
+  targetCumMWh: number;       // running target: -(i+1) * targetOffloadMW/2 (negative)
+  lyb1TargetMW: number;       // lyb1Cap - targetOffload/2
+  lyb2TargetMW: number;       // lyb2Cap - targetOffload/2
   forecastMW: number;         // lyb1TargetMW + lyb2TargetMW
 }
 
-/** Overrides for a single row. Undefined fields fall back to defaults / AEMO. */
+/** Per-HH user overrides. All fields optional — undefined means "use AEMO / default". */
 export interface RowOverrides {
-  lyb1TargetMW?: number;
-  lyb2TargetMW?: number;
-  actualMW?: number;
+  lyb1Actual?: number;
+  lyb2Actual?: number;
+  lyb1Gas?: number;
+  lyb2Gas?: number;
 }
 
-/** Row after actuals and overrides are applied. */
+/** Row after actuals + overrides applied. */
 export interface ComputedRow extends ScheduleRow {
-  actualMW: number | null;     // AEMO value (or override); null if neither available
-  mwLoss: number;              // totalCap - (actualMW ?? forecastMW)
-  mwhThisHH: number;           // mwLoss / 2
-  cumMWh: number;              // running sum of mwhThisHH through this row
-  // Which fields came from user overrides (for UI marking).
-  overridden: { lyb1TargetMW: boolean; lyb2TargetMW: boolean; actualMW: boolean };
+  // Per-unit actuals (AEMO or user override). null if neither available.
+  lyb1Actual: number | null;
+  lyb2Actual: number | null;
+  // Gas MW used per unit (user entry only, default 0).
+  lyb1Gas: number;
+  lyb2Gas: number;
+  /** Total station actual after subtracting gas usage. null if either unit actual is missing. */
+  totalActualMW: number | null;
+  /** Capacity - (totalActualMW ?? forecastMW). */
+  mwLoss: number;
+  /** mwLoss / 2. */
+  mwhThisHH: number;
+  /** Running sum of mwhThisHH through this row. */
+  cumMWh: number;
+  overridden: {
+    lyb1Actual: boolean;
+    lyb2Actual: boolean;
+    lyb1Gas: boolean;
+    lyb2Gas: boolean;
+  };
 }
 
 /** Number of half-hour rows in the event. */
@@ -54,16 +70,12 @@ export function offloadRate(config: OffloadConfig): number {
   return config.mwReduction / config.durationHrs;
 }
 
-/**
- * Build the base schedule — no actuals, no overrides.
- * Each row represents a half-hour block labeled by its ending timestamp.
- */
+/** Build the base schedule — no actuals, no overrides. */
 export function buildSchedule(config: OffloadConfig): ScheduleRow[] {
   const rows: ScheduleRow[] = [];
   const start = new Date(config.startISO).getTime();
   const rate = offloadRate(config);
-  // Clamp at zero — a unit can't run at negative MW. If the event demands
-  // more offload than a unit's capacity, the target bottoms out at shut-down (0).
+  // Clamp at zero — a unit can't run at negative MW.
   const lyb1Target = Math.max(0, config.lyb1Cap - rate / 2);
   const lyb2Target = Math.max(0, config.lyb2Cap - rate / 2);
   for (let i = 0; i < rowCount(config); i++) {
@@ -71,6 +83,7 @@ export function buildSchedule(config: OffloadConfig): ScheduleRow[] {
     rows.push({
       hhEnding: new Date(hhEndMs).toISOString(),
       targetOffloadMW: rate,
+      targetCumMWh: -((i + 1) * rate / 2),  // -200, -400, -600, ...
       lyb1TargetMW: lyb1Target,
       lyb2TargetMW: lyb2Target,
       forecastMW: lyb1Target + lyb2Target,
@@ -79,17 +92,13 @@ export function buildSchedule(config: OffloadConfig): ScheduleRow[] {
   return rows;
 }
 
-/** Map from HH-ending ISO timestamp → actual MW at the station (LYB1+LYB2 summed, 30-min avg). */
-export type ActualsByHH = Map<string, number>;
+/** Per-HH AEMO actual MW split by unit. */
+export type ActualsByHH = Map<string, { lyb1: number; lyb2: number }>;
 
-/** Map from HH-ending ISO timestamp → per-row user overrides. */
+/** Per-HH user overrides. */
 export type OverridesByHH = Map<string, RowOverrides>;
 
-/**
- * Apply AEMO actuals and user overrides to the schedule.
- * Override precedence: user override > AEMO value > null.
- * Cumulative MWh always uses the effective actual (override > AEMO > forecast fallback).
- */
+/** Apply AEMO actuals + user overrides to a schedule. */
 export function applyActuals(
   schedule: ScheduleRow[],
   actuals: ActualsByHH,
@@ -101,29 +110,40 @@ export function applyActuals(
   let cumMWh = 0;
   for (const row of schedule) {
     const ov = overrides.get(row.hhEnding) ?? {};
-    const aemoActual = actuals.get(row.hhEnding);
-    const effectiveLyb1Target = ov.lyb1TargetMW ?? row.lyb1TargetMW;
-    const effectiveLyb2Target = ov.lyb2TargetMW ?? row.lyb2TargetMW;
-    const effectiveForecast = effectiveLyb1Target + effectiveLyb2Target;
-    const actualMW = ov.actualMW ?? aemoActual ?? null;
+    const aemo = actuals.get(row.hhEnding);
+
+    const lyb1Actual = ov.lyb1Actual ?? aemo?.lyb1 ?? null;
+    const lyb2Actual = ov.lyb2Actual ?? aemo?.lyb2 ?? null;
+    const lyb1Gas = ov.lyb1Gas ?? 0;
+    const lyb2Gas = ov.lyb2Gas ?? 0;
+
+    // Total available only when both units have an actual reading.
+    const totalActualMW =
+      lyb1Actual != null && lyb2Actual != null
+        ? lyb1Actual - lyb1Gas + lyb2Actual - lyb2Gas
+        : null;
+
     // Fall back to forecast so cumulative MWh projects forward before AEMO data arrives.
-    const basisMW = actualMW ?? effectiveForecast;
+    const basisMW = totalActualMW ?? row.forecastMW;
     const mwLoss = cap - basisMW;
     const mwhThisHH = mwLoss / 2;
     cumMWh += mwhThisHH;
+
     result.push({
       ...row,
-      lyb1TargetMW: effectiveLyb1Target,
-      lyb2TargetMW: effectiveLyb2Target,
-      forecastMW: effectiveForecast,
-      actualMW,
+      lyb1Actual,
+      lyb2Actual,
+      lyb1Gas,
+      lyb2Gas,
+      totalActualMW,
       mwLoss,
       mwhThisHH,
       cumMWh,
       overridden: {
-        lyb1TargetMW: ov.lyb1TargetMW !== undefined,
-        lyb2TargetMW: ov.lyb2TargetMW !== undefined,
-        actualMW: ov.actualMW !== undefined,
+        lyb1Actual: ov.lyb1Actual !== undefined,
+        lyb2Actual: ov.lyb2Actual !== undefined,
+        lyb1Gas: ov.lyb1Gas !== undefined,
+        lyb2Gas: ov.lyb2Gas !== undefined,
       },
     });
   }
@@ -136,7 +156,6 @@ export type ProgressState = "onTrack" | "behind" | "over";
 export function progressState(rows: ComputedRow[], config: OffloadConfig, nowMs = Date.now()): ProgressState {
   const cumTotal = rows[rows.length - 1]?.cumMWh ?? 0;
   if (cumTotal > config.mwReduction * 1.1) return "over";
-  // Linear target: expected MWh by this point in time.
   const startMs = new Date(config.startISO).getTime();
   const elapsedHrs = Math.max(0, (nowMs - startMs) / 3_600_000);
   if (elapsedHrs >= config.durationHrs) return cumTotal >= config.mwReduction * 0.9 ? "onTrack" : "behind";
