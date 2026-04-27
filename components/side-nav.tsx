@@ -12,7 +12,6 @@ import {
   Flag,
   Flame,
   Factory,
-  Lock,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -36,7 +35,6 @@ interface NavItem {
   icon?: LucideIcon;
   /** Single-letter mark used in place of an icon (e.g. "N", "W"). */
   letter?: string;
-  gated?: boolean;
 }
 
 interface NavSection {
@@ -71,8 +69,8 @@ const SECTIONS: NavSection[] = [
     items: [
       { id: "startcost", label: "Braemar Start", icon: Flag },
       { id: "offloading", label: "Coal Offloading", icon: Flame },
-      { id: "braemar", label: "Braemar Revenue", icon: Factory, gated: true },
-      { id: "bdl", label: "BDL Revenue", icon: Factory, gated: true },
+      { id: "braemar", label: "Braemar Revenue", icon: Factory },
+      { id: "bdl", label: "BDL Revenue", icon: Factory },
     ],
   },
 ];
@@ -87,11 +85,9 @@ export const SIDE_NAV_COLLAPSED_WIDTH = COLLAPSED_W;
 export function SideNav({
   activeTab,
   onTabChange,
-  powerUnlocked,
 }: {
   activeTab: NavTabId;
   onTabChange: (id: NavTabId) => void;
-  powerUnlocked: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const timerRef = useRef<number | null>(null);
@@ -161,7 +157,6 @@ export function SideNav({
                     key={item.id}
                     item={item}
                     active={activeTab === item.id}
-                    showLock={item.gated === true && !powerUnlocked}
                     expanded={expanded}
                     onClick={() => onTabChange(item.id)}
                   />
@@ -178,13 +173,11 @@ export function SideNav({
 function NavButton({
   item,
   active,
-  showLock,
   expanded,
   onClick,
 }: {
   item: NavItem;
   active: boolean;
-  showLock: boolean;
   expanded: boolean;
   onClick: () => void;
 }) {
@@ -226,14 +219,6 @@ function NavButton({
       >
         {item.label}
       </span>
-      {showLock && (
-        <Lock
-          className={cn(
-            "h-3 w-3 text-zinc-600 ml-auto transition-opacity duration-150",
-            expanded ? "opacity-100" : "opacity-0",
-          )}
-        />
-      )}
     </button>
   );
 }

@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useState, useEffect, useMemo, useCallback, type FormEvent } from "react";
-import { Copy, Check, RefreshCw, Sun, Moon, Pencil, Save, Plus, X, Thermometer, Wind, Zap, ArrowLeftRight, AlertTriangle, Clock, Filter, Lock } from "lucide-react";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
+import { Copy, Check, RefreshCw, Sun, Moon, Pencil, Save, Plus, X, Thermometer, Wind, Zap, ArrowLeftRight, AlertTriangle, Clock, Filter } from "lucide-react";
 import useSWR from "swr";
 import { cn } from "@/lib/utils";
 import { useAutoRefresh } from "@/lib/hooks/use-auto-refresh";
@@ -279,37 +279,6 @@ function deltaColor(delta: number | null | undefined): string {
 
 // --- Page ---
 
-function PowerGate({ onUnlock }: { onUnlock: () => void }) {
-  const [password, setPassword] = useState("");
-  return (
-    <Card className="rounded-xl max-w-md mx-auto mt-12">
-      <CardHeader className="text-center">
-        <Lock className="mx-auto mb-2 h-8 w-8 text-zinc-500" />
-        <CardTitle className="text-base">This tab is password-protected</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <form
-          onSubmit={(e: FormEvent) => {
-            e.preventDefault();
-            if (password === "power") onUnlock();
-            else setPassword("");
-          }}
-          className="flex gap-2"
-        >
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="Enter password"
-            className="flex-1 rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-          <Button type="submit" size="sm">Unlock</Button>
-        </form>
-      </CardContent>
-    </Card>
-  );
-}
-
 export default function HomePage() {
   const [activeTab, setActiveTab] = useState<TabId>("prices");
   const [region, setRegion] = useState<string>("QLD1");
@@ -318,8 +287,6 @@ export default function HomePage() {
   const [copiedReason, setCopiedReason] = useState(false);
   const [selectedRow, setSelectedRow] = useState<SelectedRow | null>(null);
   const [isDark, setIsDark] = useState(true);
-  // Single unlock gate for sensitive tabs (BR Start + Revenue). Password: "power".
-  const [powerUnlocked, setPowerUnlocked] = useState(false);
 
   useEffect(() => {
     const stored = localStorage.getItem("theme");
@@ -437,7 +404,6 @@ export default function HomePage() {
       <SideNav
         activeTab={activeTab as NavTabId}
         onTabChange={(id) => handleTabChange(id)}
-        powerUnlocked={powerUnlocked}
       />
 
       {/* Main content is offset by the collapsed sidebar width; expansion overlays it. */}
@@ -618,7 +584,6 @@ export default function HomePage() {
           <SpikesTab />
         </TabsContent>
 
-        {/* === BRAEMAR START TAB (password-gated) === */}
         <TabsContent value="startcost">
           <StartCostTab />
         </TabsContent>
@@ -632,12 +597,11 @@ export default function HomePage() {
           <MarketAnalysisTab />
         </TabsContent>
 
-        {/* === REVENUE TABS (password-gated) === */}
         <TabsContent value="braemar" className="mt-4">
-          {powerUnlocked ? <RevenueTab plant="braemar" /> : <PowerGate onUnlock={() => setPowerUnlocked(true)} />}
+          <RevenueTab plant="braemar" />
         </TabsContent>
         <TabsContent value="bdl" className="mt-4">
-          {powerUnlocked ? <RevenueTab plant="bdl" /> : <PowerGate onUnlock={() => setPowerUnlocked(true)} />}
+          <RevenueTab plant="bdl" />
         </TabsContent>
 
           </div>
