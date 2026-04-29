@@ -7,7 +7,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Info, Copy, Check } from "lucide-react";
 import {
-  applyActuals, buildSchedule, offloadRate, totalCap, INTERVAL_MIN,
+  applyActuals, buildSchedule, offloadRate, totalCap, snapToInterval,
   type ActualsByInterval, type OffloadConfig,
 } from "@/lib/offloading/math";
 
@@ -37,10 +37,7 @@ const DEFAULTS: OffloadConfig = {
 };
 
 function nextIntervalISO(): string {
-  const now = new Date();
-  const ms = now.getTime();
-  const stepMs = INTERVAL_MIN * 60 * 1000;
-  return new Date(Math.ceil(ms / stepMs) * stepMs).toISOString();
+  return snapToInterval(Date.now());
 }
 
 function loadConfig(): OffloadConfig {
@@ -54,10 +51,7 @@ function loadConfig(): OffloadConfig {
       delete parsed.mwhReduction;
     }
     const merged = { ...DEFAULTS, ...parsed } as OffloadConfig;
-    // Snap any stored startISO that doesn't sit on a 5-min boundary forward to the next 5-min.
-    const t = new Date(merged.startISO).getTime();
-    const stepMs = INTERVAL_MIN * 60 * 1000;
-    if (t % stepMs !== 0) merged.startISO = new Date(Math.ceil(t / stepMs) * stepMs).toISOString();
+    merged.startISO = snapToInterval(merged.startISO);
     return merged;
   } catch { return DEFAULTS; }
 }
@@ -140,6 +134,8 @@ export function OffloadingTab() {
     const startLabel = fmtTimeOnly(config.startISO);
     const endISO = new Date(new Date(config.startISO).getTime() + config.durationHrs * 3600_000).toISOString();
     const endLabel = fmtTimeOnly(endISO);
+    // Row 0 = initial uniform target. Stays stable as catch-up redistributes later rows,
+    // so the copy reads the same before and during the event.
     const forecastMW = rows[0]?.forecastMW ?? 0;
     return `Coal offloading event — LYB reducing to ~${forecastMW.toFixed(0)} MW from interval ${startLabel} to ${endLabel}. Target ${config.mwReduction.toFixed(0)} MWh reduction.`;
   }, [config, rows]);

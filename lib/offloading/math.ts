@@ -3,6 +3,14 @@
 /** All schedule rows are 5-min ending intervals to match AEMO dispatch cadence. */
 export const INTERVAL_MIN = 5;
 
+/** Snap an instant to a 5-min interval boundary. Defaults to ceiling (next boundary). */
+export function snapToInterval(t: number | Date | string, mode: "ceil" | "floor" = "ceil"): string {
+  const ms = typeof t === "number" ? t : new Date(t).getTime();
+  const stepMs = INTERVAL_MIN * 60 * 1000;
+  const fn = mode === "ceil" ? Math.ceil : Math.floor;
+  return new Date(fn(ms / stepMs) * stepMs).toISOString();
+}
+
 export interface OffloadConfig {
   /** ISO timestamp for the first 5-min interval ending. */
   startISO: string;
