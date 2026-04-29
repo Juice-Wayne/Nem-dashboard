@@ -7,8 +7,17 @@
  *   D  – data row
  *
  * Returns Map<tableName, rows[]> where each row is a Record<string, string>.
+ *
+ * `rowFilter` is an optional predicate run per data row before it's added —
+ * use it to drop rows you don't need at parse time (critical for big files
+ * like Next_Day_PreDispatch where we only want LYB1/LYB2 out of ~330 DUIDs).
  */
-export function parseNEMWebCSV(text: string): Map<string, Record<string, string>[]> {
+export type RowFilter = (table: string, row: Record<string, string>) => boolean;
+
+export function parseNEMWebCSV(
+  text: string,
+  rowFilter?: RowFilter,
+): Map<string, Record<string, string>[]> {
   const tables = new Map<string, Record<string, string>[]>();
   let currentTable = "";
   let columns: string[] = [];
@@ -21,8 +30,6 @@ export function parseNEMWebCSV(text: string): Map<string, Record<string, string>
     const recordType = fields[0];
 
     if (recordType === "I") {
-      // fields[2] is the table name (e.g. "REGIONSOLUTION")
-      // Build a compound key from fields[1] (report) + fields[2] (table)
       currentTable = `${fields[1]}_${fields[2]}`.toUpperCase();
       columns = fields.slice(3).map((c) => c.toUpperCase());
       if (!tables.has(currentTable)) {
@@ -34,9 +41,9 @@ export function parseNEMWebCSV(text: string): Map<string, Record<string, string>
       for (let i = 0; i < columns.length; i++) {
         row[columns[i]] = values[i] ?? "";
       }
+      if (rowFilter && !rowFilter(currentTable, row)) continue;
       tables.get(currentTable)!.push(row);
     }
-    // C and other row types are ignored
   }
 
   return tables;

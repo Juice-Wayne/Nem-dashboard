@@ -1,5 +1,5 @@
 import JSZip from "jszip";
-import { parseNEMWebCSV } from "./csv-parser";
+import { parseNEMWebCSV, type RowFilter } from "./csv-parser";
 
 const BASE = "https://nemweb.com.au";
 const FETCH_OPTS: RequestInit = {
@@ -337,20 +337,20 @@ function isoIsToday(isoDate: string): boolean {
   return isoDate === todayIso;
 }
 
-export type ArchiveReport = "DISPATCHSCADA" | "DISPATCHIS" | "NEXT_DAY_DISPATCH";
+export type ArchiveReport = "DISPATCHSCADA" | "DISPATCHIS" | "NEXT_DAY_DISPATCH" | "NEXT_DAY_PREDISPATCH";
 
 const ARCHIVE_PATHS: Record<ArchiveReport, string> = {
   DISPATCHSCADA: "/Reports/Archive/Dispatch_SCADA/",
   DISPATCHIS:    "/Reports/Archive/DispatchIS_Reports/",
   // Recent days live in /Current/ with a unique numeric suffix per file (we glob the dir listing).
-  // Older days roll into /Archive/ as monthly bundles dated YYYYMM01.
-  NEXT_DAY_DISPATCH: "/Reports/Current/Next_Day_Dispatch/",
+  NEXT_DAY_DISPATCH:    "/Reports/Current/Next_Day_Dispatch/",
+  NEXT_DAY_PREDISPATCH: "/Reports/Current/Next_Day_PreDispatch/",
 };
 
-/** NEXT_DAY_DISPATCH: zips contain a single CSV directly (not 288 inner zips). Other archives
- *  are containers of one-zip-per-5-min. */
+/** Flat-zip archives contain a single CSV directly (not ~288 inner zips). */
 const ARCHIVE_IS_FLAT_ZIP: Partial<Record<ArchiveReport, boolean>> = {
   NEXT_DAY_DISPATCH: true,
+  NEXT_DAY_PREDISPATCH: true,
 };
 
 /**
@@ -369,9 +369,11 @@ export async function fetchArchiveDay(
   report: ArchiveReport,
   isoDate: string,
   tables?: ReadonlySet<string>,
+  rowFilter?: RowFilter,
 ): Promise<Map<string, Record<string, string>[]>> {
   const tablesKey = tables ? [...tables].sort().join(",") : "*";
-  const key = `${report}:${isoDate}:${tablesKey}`;
+  const filterKey = rowFilter ? "FILTERED" : "*";
+  const key = `${report}:${isoDate}:${tablesKey}:${filterKey}`;
   const cached = archiveDayCache.get(key);
   if (cached && cached.expiry > Date.now()) return cached.data;
 
@@ -409,7 +411,7 @@ export async function fetchArchiveDay(
         }
       }
       if (csvText) {
-        const parsed = parseNEMWebCSV(csvText);
+        const parsed = parseNEMWebCSV(csvText, rowFilter);
         for (const [table, rows] of parsed) {
           if (tables && !tables.has(table)) continue;
           merged.set(table, rows);
@@ -434,7 +436,7 @@ export async function fetchArchiveDay(
         }
         if (!csvText) continue;
 
-        const parsed = parseNEMWebCSV(csvText);
+        const parsed = parseNEMWebCSV(csvText, rowFilter);
         for (const [table, rows] of parsed) {
           if (tables && !tables.has(table)) continue;
           const existing = merged.get(table);
