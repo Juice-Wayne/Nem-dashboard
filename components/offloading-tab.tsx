@@ -157,7 +157,7 @@ export function OffloadingTab() {
                 className={`${INPUT_CLS} ${SRC.INPUT} [color-scheme:dark] cursor-pointer [&::-webkit-calendar-picker-indicator]:opacity-60 [&::-webkit-calendar-picker-indicator]:hover:opacity-100`}
               />
             </Field>
-            <Field label="Start time" className="md:col-span-2">
+            <Field label="Start time">
               <TimePicker
                 value={toTimeInput(config.startISO)}
                 onChange={(hhmm24) => update("startISO", withTime(config.startISO, hhmm24))}
@@ -166,7 +166,7 @@ export function OffloadingTab() {
             <Field label="Duration (hrs)" tooltip="Total event duration in hours.">
               <NumInput className={SRC.INPUT} value={config.durationHrs} onChange={(v) => update("durationHrs", v)} min={1} max={99} maxDigits={2} />
             </Field>
-            <Field label="Total MWh reduction" tooltip="Total MWh to offload across the whole event.">
+            <Field label="MWh reduction" tooltip="Total MWh to offload across the whole event.">
               <NumInput className={SRC.INPUT} value={config.mwReduction} onChange={(v) => update("mwReduction", v)} min={0} />
             </Field>
             <Field label="LYB1 cap (MW)">
@@ -175,10 +175,10 @@ export function OffloadingTab() {
             <Field label="LYB2 cap (MW)">
               <NumInput className={SRC.INPUT} value={config.lyb2Cap} onChange={(v) => update("lyb2Cap", v)} min={0} max={999} maxDigits={3} />
             </Field>
-            <Field label="LYB1 ramp (MW/min)" tooltip="LYB1 ramp rate of change.">
+            <Field label="LYB1 ramp (MW/m)" tooltip="LYB1 ramp rate of change.">
               <NumInput className={SRC.INPUT} value={config.lyb1RampRate} onChange={(v) => update("lyb1RampRate", v)} min={0} max={99} maxDigits={2} />
             </Field>
-            <Field label="LYB2 ramp (MW/min)" tooltip="LYB2 ramp rate of change.">
+            <Field label="LYB2 ramp (MW/m)" tooltip="LYB2 ramp rate of change.">
               <NumInput className={SRC.INPUT} value={config.lyb2RampRate} onChange={(v) => update("lyb2RampRate", v)} min={0} max={99} maxDigits={2} />
             </Field>
           </div>
@@ -326,10 +326,10 @@ function TimePicker({ value, onChange }: { value: string; onChange: (hhmm24: str
     onChange(`${pad2(newH24)}:${pad2(newM)}`);
   };
 
-  const triggerCls = `bg-zinc-950 border border-zinc-700 rounded h-8 px-2 text-zinc-200 font-mono text-xs min-w-0 w-full ${SRC.INPUT}`;
+  const triggerCls = `bg-zinc-950 border border-zinc-700 rounded h-8 px-1 text-zinc-200 font-mono text-xs min-w-0 w-full ${SRC.INPUT}`;
 
   return (
-    <div className="flex gap-1 items-center">
+    <div className="flex gap-0.5 items-center min-w-0">
       <Select value={String(h12)} onValueChange={(v) => commit(Number(v), m, ampm)}>
         <SelectTrigger size="sm" className={triggerCls}><SelectValue>{pad2(h12)}</SelectValue></SelectTrigger>
         <SelectContent>
@@ -338,7 +338,6 @@ function TimePicker({ value, onChange }: { value: string; onChange: (hhmm24: str
           ))}
         </SelectContent>
       </Select>
-      <span className="text-zinc-500">:</span>
       <Select value={String(m)} onValueChange={(v) => commit(h12, Number(v), ampm)}>
         <SelectTrigger size="sm" className={triggerCls}><SelectValue>{pad2(m)}</SelectValue></SelectTrigger>
         <SelectContent>
