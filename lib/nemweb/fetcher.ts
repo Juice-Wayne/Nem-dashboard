@@ -337,11 +337,20 @@ function isoIsToday(isoDate: string): boolean {
   return isoDate === todayIso;
 }
 
-export type ArchiveReport = "DISPATCHSCADA" | "DISPATCHIS";
+export type ArchiveReport = "DISPATCHSCADA" | "DISPATCHIS" | "NEXT_DAY_DISPATCH";
 
 const ARCHIVE_PATHS: Record<ArchiveReport, string> = {
   DISPATCHSCADA: "/Reports/Archive/Dispatch_SCADA/",
   DISPATCHIS:    "/Reports/Archive/DispatchIS_Reports/",
+  // Recent days live in /Current/ with a unique numeric suffix per file (we glob the dir listing).
+  // Older days roll into /Archive/ as monthly bundles dated YYYYMM01.
+  NEXT_DAY_DISPATCH: "/Reports/Current/Next_Day_Dispatch/",
+};
+
+/** NEXT_DAY_DISPATCH: zips contain a single CSV directly (not 288 inner zips). Other archives
+ *  are containers of one-zip-per-5-min. */
+const ARCHIVE_IS_FLAT_ZIP: Partial<Record<ArchiveReport, boolean>> = {
+  NEXT_DAY_DISPATCH: true,
 };
 
 /**
@@ -368,7 +377,21 @@ export async function fetchArchiveDay(
 
   return dedup(`archiveDay:${key}`, async () => {
     const compact = compactDate(isoDate);
-    const url = `${BASE}${ARCHIVE_PATHS[report]}PUBLIC_${report}_${compact}.zip`;
+    const dirPath = ARCHIVE_PATHS[report];
+
+    // Some reports (NEXT_DAY_DISPATCH) include a per-publish suffix in the filename, so we
+    // glob the directory listing for the date prefix and pick the latest match.
+    let url: string;
+    if (ARCHIVE_IS_FLAT_ZIP[report]) {
+      const links = await listDirectory(dirPath);
+      const prefix = `PUBLIC_${report}_${compact}`;
+      const match = links.find((l) => l.includes(prefix));
+      if (!match) throw new Error(`No ${report} file found for ${isoDate}`);
+      const filename = match.split("/").pop() ?? match;
+      url = `${BASE}${dirPath}${filename}`;
+    } else {
+      url = `${BASE}${dirPath}PUBLIC_${report}_${compact}.zip`;
+    }
 
     const res = await fetchWithRetry(url);
     const buf = await res.arrayBuffer();
@@ -376,30 +399,48 @@ export async function fetchArchiveDay(
 
     const merged = new Map<string, Record<string, string>[]>();
 
-    // Collect inner zip entries in filename order (AEMO names are chronological)
-    const innerEntries = Object.keys(outerZip.files)
-      .filter((n) => n.toLowerCase().endsWith(".zip"))
-      .sort();
-
-    for (const entryName of innerEntries) {
-      const innerBuf = await outerZip.files[entryName].async("uint8array");
-      const innerZip = await JSZip.loadAsync(innerBuf);
-
+    if (ARCHIVE_IS_FLAT_ZIP[report]) {
+      // Flat zip: one CSV directly inside.
       let csvText = "";
-      for (const name of Object.keys(innerZip.files)) {
+      for (const name of Object.keys(outerZip.files)) {
         if (name.toLowerCase().endsWith(".csv")) {
-          csvText = await innerZip.files[name].async("text");
+          csvText = await outerZip.files[name].async("text");
           break;
         }
       }
-      if (!csvText) continue;
+      if (csvText) {
+        const parsed = parseNEMWebCSV(csvText);
+        for (const [table, rows] of parsed) {
+          if (tables && !tables.has(table)) continue;
+          merged.set(table, rows);
+        }
+      }
+    } else {
+      // Container zip: ~288 inner zips, each with one CSV.
+      const innerEntries = Object.keys(outerZip.files)
+        .filter((n) => n.toLowerCase().endsWith(".zip"))
+        .sort();
 
-      const parsed = parseNEMWebCSV(csvText);
-      for (const [table, rows] of parsed) {
-        if (tables && !tables.has(table)) continue;
-        const existing = merged.get(table);
-        if (existing) existing.push(...rows);
-        else merged.set(table, rows.slice());
+      for (const entryName of innerEntries) {
+        const innerBuf = await outerZip.files[entryName].async("uint8array");
+        const innerZip = await JSZip.loadAsync(innerBuf);
+
+        let csvText = "";
+        for (const name of Object.keys(innerZip.files)) {
+          if (name.toLowerCase().endsWith(".csv")) {
+            csvText = await innerZip.files[name].async("text");
+            break;
+          }
+        }
+        if (!csvText) continue;
+
+        const parsed = parseNEMWebCSV(csvText);
+        for (const [table, rows] of parsed) {
+          if (tables && !tables.has(table)) continue;
+          const existing = merged.get(table);
+          if (existing) existing.push(...rows);
+          else merged.set(table, rows.slice());
+        }
       }
     }
 
