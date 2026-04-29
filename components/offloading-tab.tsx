@@ -205,7 +205,7 @@ export function OffloadingTab() {
                     Reduction<br/><span className="text-[9px] font-normal text-zinc-500">MW / 5 min</span>
                   </TableHead>
                   <TableHead className={`text-right whitespace-nowrap ${HEADER_SRC.CALC}`}>
-                    Avg target<br/><span className="text-[9px] font-normal text-zinc-500">MW</span>
+                    Forecast gen<br/><span className="text-[9px] font-normal text-zinc-500">MW (cap − red.)</span>
                   </TableHead>
                   <TableHead className={`text-right whitespace-nowrap ${HEADER_SRC.BID}`}>
                     <CopyableHeader label="LYB1 Bid" subtitle="MW" onCopy={() => copyColumn(rows.map((r) => r.lyb1BidMW))} />
@@ -224,7 +224,7 @@ export function OffloadingTab() {
                     <TableCell className={`whitespace-nowrap ${SRC.CALC}`}>{fmtIntervalLabel(r.intervalEnding)}</TableCell>
                     <TableCell className={`text-right ${SRC.AEMO}`}>{fmtMW(r.pdTotal)}</TableCell>
                     <TableCell className={`text-right ${SRC.CALC}`}>{fmtMW(r.reductionMW)}</TableCell>
-                    <TableCell className={`text-right ${SRC.CALC}`}>{fmtMW(r.avgTargetTotal)}</TableCell>
+                    <TableCell className={`text-right ${SRC.CALC}`}>{fmtMW(r.forecastGenTotal)}</TableCell>
                     <TableCell className={`text-right ${SRC.BID}`}>{fmtMW(r.lyb1BidMW)}</TableCell>
                     <TableCell className={`text-right ${SRC.BID}`}>{fmtMW(r.lyb2BidMW)}</TableCell>
                     <TableCell className={`text-right ${SRC.CALC}`}>{fmtMW(r.cumReductionMWh)}</TableCell>

@@ -54,9 +54,9 @@ check(
 check("row0 targetCumMWh", schedule[0].targetCumMWh, -33.333);
 check("row47 targetCumMWh", schedule[47].targetCumMWh, -1600, 0.01);
 
-console.log("\ncomputeRows — PD const at 500, units ramp down at 50 MW/interval...");
-// avgTarget = 500 - 200 = 300 per unit. rawBid = 2*300 - prevEnd.
-// row 0: prev=500 → raw=100 → ramp clamp 450. row 1: prev=450 → raw=150 → ramp clamp 400. ... row 3: prev=350 → raw=250 → ramp clamp 300. row 4: prev=300 → raw=300 → bid 300 (steady).
+console.log("\ncomputeRows — PD anchor at 500, ramp down toward forecastGen 385/unit, settle...");
+// forecastGenLyb1 = 585 - 200 = 385 per unit. Drive toward 385 at ramp rate, settle.
+// row 0: prev=500 → ramp clamp 500-50=450. row 1: 400. row 2: prev=400, target=385 within ramp [350,450] → bid=385. row 3+: stay at 385.
 const intervals = schedule.map((r) => r.intervalEnding);
 const pd500 = pdMap(500, 500, intervals);
 const rows500 = computeRows(config, pd500);
@@ -64,27 +64,28 @@ const rows500 = computeRows(config, pd500);
 check("row0 pdLyb1", rows500[0].pdLyb1, 500);
 check("row0 pdTotal", rows500[0].pdTotal, 1000);
 check("row0 reductionMW", rows500[0].reductionMW, 400);
-check("row0 avgTargetTotal", rows500[0].avgTargetTotal, 600);
-check("row0 lyb1BidMW (clamped)", rows500[0].lyb1BidMW, 450);
-check("row0 lyb2BidMW (clamped)", rows500[0].lyb2BidMW, 450);
+check("row0 forecastGenTotal", rows500[0].forecastGenTotal, 770);
+check("row0 lyb1BidMW (ramp clamp)", rows500[0].lyb1BidMW, 450);
+check("row0 lyb2BidMW (ramp clamp)", rows500[0].lyb2BidMW, 450);
 check("row0 lyb1AvgAchievedMW", rows500[0].lyb1AvgAchievedMW, 475);
-// Row 0: pd=1000, avg total=475+475=950 → reduction = 50 MW × 5/60
+// PD total 1000, avg total 950 → reduction = 50 MW × 5/60
 check("row0 reductionMWhThisInterval", rows500[0].reductionMWhThisInterval, (1000 - 950) * (5 / 60), 0.001);
 
 check("row1 lyb1BidMW", rows500[1].lyb1BidMW, 400);
-check("row2 lyb1BidMW", rows500[2].lyb1BidMW, 350);
-check("row3 lyb1BidMW", rows500[3].lyb1BidMW, 300);
-check("row4 lyb1BidMW (steady)", rows500[4].lyb1BidMW, 300);
-check("row47 lyb1BidMW (steady)", rows500[47].lyb1BidMW, 300);
+check("row2 lyb1BidMW (reached target)", rows500[2].lyb1BidMW, 385);
+check("row3 lyb1BidMW (settle)", rows500[3].lyb1BidMW, 385);
+check("row47 lyb1BidMW (settle)", rows500[47].lyb1BidMW, 385);
+check("row47 lyb1AvgAchievedMW (= target)", rows500[47].lyb1AvgAchievedMW, 385);
 
-console.log("\ncomputeRows — physical clamp at 0...");
-// PD=100 → avgTarget=-100 → rawBid=-200-prev. row 0: prev=100, raw=-300, ramp 100±50 → 50.
-// row 1: prev=50, raw=-250, ramp 50±50 → 0. row 2: prev=0, raw=-200, ramp 0±50 → -50, physical clamp → 0.
+console.log("\ncomputeRows — PD low (100), ramp UP toward forecastGen 385/unit...");
+// Ramps up 50/interval until reaching 385.
+// row 0: prev=100 → 150. row 5: prev=350 → 385 (within ramp [300,400]). row 6+: 385 (settle).
 const pd100 = pdMap(100, 100, intervals);
 const rowsLow = computeRows(config, pd100);
-check("row0 lyb1BidMW (ramp limits drop)", rowsLow[0].lyb1BidMW, 50);
-check("row1 lyb1BidMW (ramp again)", rowsLow[1].lyb1BidMW, 0);
-check("row2 lyb1BidMW (physical clamp at 0)", rowsLow[2].lyb1BidMW, 0);
+check("row0 lyb1BidMW (ramp up)", rowsLow[0].lyb1BidMW, 150);
+check("row1 lyb1BidMW", rowsLow[1].lyb1BidMW, 200);
+check("row5 lyb1BidMW (reached target)", rowsLow[5].lyb1BidMW, 385);
+check("row6 lyb1BidMW (settle)", rowsLow[6].lyb1BidMW, 385);
 
 console.log("\ncomputeRows — PD missing → bid is null until PD becomes available...");
 const pdSparse: PDByInterval = new Map();
@@ -95,7 +96,7 @@ const rowsSparse = computeRows(config, pdSparse);
 check("row0 pd null → bid null", rowsSparse[0].lyb1BidMW, null);
 check("row0 cumReductionMWh = 0", rowsSparse[0].cumReductionMWh, 0);
 check("row5 cumReductionMWh still 0", rowsSparse[5].cumReductionMWh, 0);
-check("row6 has bid (PD became available)", rowsSparse[6].lyb1BidMW, 450);
+check("row6 has bid (PD became available, anchor=500, ramp clamp 450)", rowsSparse[6].lyb1BidMW, 450);
 check("row6 cumReductionMWh advances", rowsSparse[6].reductionMWhThisInterval > 0 ? 1 : 0, 1);
 
 console.log(`\nrow47 cumReductionMWh (PD=500) = ${rows500[47].cumReductionMWh.toFixed(1)} MWh (uniform target was 1600)`);

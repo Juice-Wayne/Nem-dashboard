@@ -44,15 +44,15 @@ export interface ComputedRow extends ScheduleRow {
   pdTotal: number | null;
   /** Required reduction MW this interval (uniform = mwReduction / durationHrs). */
   reductionMW: number;
-  /** Avg target station MW = pdTotal − reductionMW. null if pdTotal missing. */
-  avgTargetTotal: number | null;
-  /** Per-unit ramp-aware end-of-interval bid MW. null if PD missing. */
+  /** Forecast gen MW during offload = totalCap − reductionMW (constant per row). */
+  forecastGenTotal: number;
+  /** Per-unit ramp-aware end-of-interval bid MW. null if PD missing for row 0 anchor. */
   lyb1BidMW: number | null;
   lyb2BidMW: number | null;
   /** Per-unit linear-ramp avg achieved over interval = (prevEnd + bid) / 2. */
   lyb1AvgAchievedMW: number | null;
   lyb2AvgAchievedMW: number | null;
-  /** MWh reduction delivered this interval = (pdTotal − sum_avgAchieved) × intervalHours. */
+  /** MWh reduction delivered this interval vs PD baseline = (pdTotal − sum_avgAchieved) × intervalHours. */
   reductionMWhThisInterval: number;
   /** Running sum of reductionMWhThisInterval. */
   cumReductionMWh: number;
@@ -95,21 +95,31 @@ function clamp(v: number, lo: number, hi: number): number {
 /**
  * Compute ramp-aware bid trajectory + delivered reduction.
  *
- * For each interval and each unit:
- *   avgTarget = pdTarget - reductionMW/2
- *   rawBid    = 2 × avgTarget − prevEnd   (end-MW that produces avgTarget under linear ramp)
- *   bid       = clamp(rawBid, prevEnd ± rampMW × intervalMin, [0, unitCap])
- *   prevEnd   = bid (carry forward to next row)
+ * Steady-state offload setpoint per unit is capacity-based:
+ *   forecastGenTotal = totalCap − reductionMW                        (constant per row)
+ *   forecastGenUnit  = unitCap  − reductionMW / 2                    (constant per row)
  *
- * Row 0's prevEnd anchors at the unit's first-seen PD target (assume the unit
- * was running at PD entering the event). When a unit's PD is missing, that
- * unit's bid/avg fields are null and don't contribute to cumReductionMWh.
+ * Each row's bid is the end-of-interval MW driving the unit toward the
+ * offload setpoint at full ramp, settling there once reached:
+ *   bid = clamp(forecastGenUnit, prevEnd ± rampMW × intervalMin, [0, unitCap])
+ *
+ * During the ramp-in phase the avg achieved is between prevEnd and the bid,
+ * so cumulative delivered MWh will lag the uniform target until the unit
+ * reaches the offload setpoint and holds.
+ *
+ * Row 0 anchors prevEnd at the unit's first non-null PD target (where AEMO
+ * predicts the unit was running entering the event). PD targets in later
+ * rows are displayed but don't change the trajectory — the unit ramps from
+ * row 0's PD anchor toward the steady-state forecastGenUnit, then holds.
  */
 export function computeRows(config: OffloadConfig, pdByInterval: PDByInterval): ComputedRow[] {
   const schedule = buildSchedule(config);
   const intervalHours = INTERVAL_MIN / 60;
   const reductionPerRow = reductionMW(config);
-  const halfReduction = reductionPerRow / 2;
+  const cap = totalCap(config);
+  const forecastGenTotal = cap - reductionPerRow;
+  const forecastGenLyb1 = config.lyb1Cap - reductionPerRow / 2;
+  const forecastGenLyb2 = config.lyb2Cap - reductionPerRow / 2;
 
   const lyb1RampMW = config.lyb1RampRate * INTERVAL_MIN;
   const lyb2RampMW = config.lyb2RampRate * INTERVAL_MIN;
@@ -123,14 +133,12 @@ export function computeRows(config: OffloadConfig, pdByInterval: PDByInterval): 
     const pdLyb1 = pd?.lyb1 ?? null;
     const pdLyb2 = pd?.lyb2 ?? null;
     const pdTotal = pdLyb1 != null && pdLyb2 != null ? pdLyb1 + pdLyb2 : null;
-    const avgTargetTotal = pdTotal != null ? pdTotal - reductionPerRow : null;
 
-    // Anchor prevEnd at PD on first non-null PD seen for each unit.
     if (prevEnd1 == null && pdLyb1 != null) prevEnd1 = pdLyb1;
     if (prevEnd2 == null && pdLyb2 != null) prevEnd2 = pdLyb2;
 
-    const lyb1BidMW = computeBid(pdLyb1, prevEnd1, halfReduction, lyb1RampMW, config.lyb1Cap);
-    const lyb2BidMW = computeBid(pdLyb2, prevEnd2, halfReduction, lyb2RampMW, config.lyb2Cap);
+    const lyb1BidMW = computeBid(prevEnd1, forecastGenLyb1, lyb1RampMW, config.lyb1Cap);
+    const lyb2BidMW = computeBid(prevEnd2, forecastGenLyb2, lyb2RampMW, config.lyb2Cap);
 
     const lyb1AvgAchievedMW = lyb1BidMW != null && prevEnd1 != null ? (prevEnd1 + lyb1BidMW) / 2 : null;
     const lyb2AvgAchievedMW = lyb2BidMW != null && prevEnd2 != null ? (prevEnd2 + lyb2BidMW) / 2 : null;
@@ -154,7 +162,7 @@ export function computeRows(config: OffloadConfig, pdByInterval: PDByInterval): 
       pdLyb2,
       pdTotal,
       reductionMW: reductionPerRow,
-      avgTargetTotal,
+      forecastGenTotal,
       lyb1BidMW,
       lyb2BidMW,
       lyb1AvgAchievedMW,
@@ -166,15 +174,13 @@ export function computeRows(config: OffloadConfig, pdByInterval: PDByInterval): 
 }
 
 function computeBid(
-  pd: number | null,
   prevEnd: number | null,
-  halfReduction: number,
+  forecastGenUnit: number,
   rampMW: number,
   unitCap: number,
 ): number | null {
-  if (pd == null || prevEnd == null) return null;
-  const avgTarget = pd - halfReduction;
-  const rawBid = 2 * avgTarget - prevEnd;
-  const rampClamped = clamp(rawBid, prevEnd - rampMW, prevEnd + rampMW);
+  if (prevEnd == null) return null;
+  // Drive the unit toward the offload setpoint as fast as the ramp allows; settle there once reached.
+  const rampClamped = clamp(forecastGenUnit, prevEnd - rampMW, prevEnd + rampMW);
   return clamp(rampClamped, 0, unitCap);
 }
