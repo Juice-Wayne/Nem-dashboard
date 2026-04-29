@@ -1,10 +1,18 @@
 /**
- * Verify math.ts against the known-good Q326 workbook values.
+ * Verify lib/offloading/math.ts behaviour for 5-min rows + dynamic target.
  * Run: npx tsx scripts/verify-offloading-math.ts
  */
-import { buildSchedule, applyActuals, offloadRate, totalCap, type OffloadConfig } from "../lib/offloading/math";
+import {
+  applyActuals,
+  buildSchedule,
+  offloadRate,
+  rowCount,
+  totalCap,
+  INTERVAL_MIN,
+  type ActualsByInterval,
+  type OffloadConfig,
+} from "../lib/offloading/math";
 
-// Q326 workbook inputs (context/LYB Coal Offloading - Q326.xlsx, sheet "LYB targets for offload")
 const config: OffloadConfig = {
   startISO: "2025-07-01T13:00:00.000Z",
   durationHrs: 4,
@@ -19,51 +27,97 @@ function check(label: string, got: number, want: number, tol = 0.01) {
   else console.log(`  OK ${label} = ${got}`);
 }
 
-console.log("Verifying OffloadConfig helpers...");
+console.log("Constants & helpers...");
+check("INTERVAL_MIN", INTERVAL_MIN, 5);
 check("totalCap", totalCap(config), 1170);
-check("offloadRate", offloadRate(config), 400);  // 1600 total / 4 hrs
+check("offloadRate", offloadRate(config), 400); // 1600 / 4 hrs
+check("rowCount(4hr)", rowCount(config), 48); // 4 hrs * 12 intervals/hr
 
-console.log("\nVerifying buildSchedule...");
+console.log("\nbuildSchedule timeline...");
 const schedule = buildSchedule(config);
-check("rowCount", schedule.length, 8);
-check("row0 targetOffloadMW", schedule[0].targetOffloadMW, 400);
-check("row0 targetCumMWh", schedule[0].targetCumMWh, -200);  // -(1 * 400/2)
-check("row1 targetCumMWh", schedule[1].targetCumMWh, -400);
-check("row7 targetCumMWh", schedule[7].targetCumMWh, -1600);
-check("row0 lyb1TargetMW", schedule[0].lyb1TargetMW, 385);   // 585 - 400/2
-check("row0 lyb2TargetMW", schedule[0].lyb2TargetMW, 385);
-check("row0 forecastMW", schedule[0].forecastMW, 770);
+check("schedule length", schedule.length, 48);
+check(
+  "row1 step is 5 min after row0",
+  new Date(schedule[1].intervalEnding).getTime() -
+    new Date(schedule[0].intervalEnding).getTime(),
+  5 * 60 * 1000,
+);
+// targetCumMWh: per-row mwh = 400 MW * (5/60) = 33.333..., negative running sum
+check("row0 targetCumMWh", schedule[0].targetCumMWh, -33.333, 0.01);
+check("row47 targetCumMWh", schedule[47].targetCumMWh, -1600, 0.01);
 
-console.log("\nVerifying applyActuals (no overrides, no AEMO — forecast fallback)...");
-const computed = applyActuals(schedule, new Map(), new Map(), config);
-check("row0 mwLoss (forecast basis)", computed[0].mwLoss, 400);
-check("row0 mwhThisHH", computed[0].mwhThisHH, 200);
-check("row7 cumMWh (all forecast)", computed[7].cumMWh, 1600);
+console.log("\napplyActuals — no AEMO data (forecast fallback) hits target exactly...");
+const noActuals = applyActuals(schedule, new Map(), config);
+check("row0 targetOffloadMW", noActuals[0].targetOffloadMW, 400); // 1600 / 4hr
+check("row0 lyb1TargetMW", noActuals[0].lyb1TargetMW, 385); // 585 - 200
+check("row0 lyb2TargetMW", noActuals[0].lyb2TargetMW, 385);
+check("row0 forecastMW", noActuals[0].forecastMW, 770);
+check("row0 mwLoss (forecast basis)", noActuals[0].mwLoss, 400);
+check(
+  "row0 mwhThisInterval",
+  noActuals[0].mwhThisInterval,
+  400 * (5 / 60),
+  0.0001,
+); // 33.333
+check("row47 cumMWh (all forecast)", noActuals[47].cumMWh, 1600, 0.01);
 
-console.log("\nVerifying applyActuals with AEMO per-unit values (workbook row 11)...");
-const aemo = new Map([[schedule[0].hhEnding, { lyb1: 575.6, lyb2: 579.8 }]]);
-const withAemo = applyActuals(schedule, aemo, new Map(), config);
-check("row0 lyb1Actual", withAemo[0].lyb1Actual ?? -1, 575.6);
-check("row0 lyb2Actual", withAemo[0].lyb2Actual ?? -1, 579.8);
-check("row0 totalActualMW (no gas)", withAemo[0].totalActualMW ?? -1, 1155.4);
-check("row0 mwLoss", withAemo[0].mwLoss, 14.6);              // 1170 - 1155.4
-check("row0 mwhThisHH", withAemo[0].mwhThisHH, 7.3);
+console.log("\nDynamic catch-up — first 6 rows overshoot, target should drop after...");
+// Operator runs the units higher than forecast for the first 30 min (6 rows of 5 min).
+// Each overshoot row: cap - actual = 1170 - 1100 = 70 MW loss. forecast was 400 MW loss.
+// Shortfall per row vs forecast = 330 MW * (5/60) = 27.5 MWh short.
+// After 6 rows: 6 * 27.5 = 165 MWh short of plan.
+// Subsequent target should rise to recover. Build actuals map: lyb1=550, lyb2=550 → total 1100.
+const overshootActuals: ActualsByInterval = new Map();
+for (let i = 0; i < 6; i++) {
+  overshootActuals.set(schedule[i].intervalEnding, { lyb1: 550, lyb2: 550 });
+}
+const dyn = applyActuals(schedule, overshootActuals, config);
+// Cum delivered after 6 overshoot rows = 6 * 70 * (5/60) = 35 MWh.
+check("row5 cumMWh after overshoot", dyn[5].cumMWh, 35, 0.01);
+// Row 6 target: remaining = 1600 - 35 = 1565 MWh; remaining hours = 42 rows * 5/60 = 3.5 hrs.
+// target = 1565 / 3.5 ≈ 447.14 MW (higher than original 400 — catch-up).
+check("row6 dynamic target", dyn[6].targetOffloadMW, 1565 / 3.5, 0.01);
+// All 48 rows still land on 1600 MWh total.
+check("row47 cumMWh (overshoot then forecast catch-up)", dyn[47].cumMWh, 1600, 0.01);
 
-console.log("\nVerifying gas override subtracts from total...");
-const overrides = new Map([[schedule[0].hhEnding, { lyb1Gas: 10, lyb2Gas: 5 }]]);
-const withGas = applyActuals(schedule, aemo, overrides, config);
-check("row0 lyb1Gas", withGas[0].lyb1Gas, 10);
-check("row0 lyb2Gas", withGas[0].lyb2Gas, 5);
-check("row0 totalActualMW (with gas)", withGas[0].totalActualMW ?? -1, 1140.4); // 575.6 - 10 + 579.8 - 5
-check("row0 overridden.lyb1Gas", withGas[0].overridden.lyb1Gas ? 1 : 0, 1);
+console.log("\nDynamic catch-up — undershoot pulls target down...");
+// First 6 rows actuals exactly match forecast (1170 - 400 = 770 MW total → lyb1=lyb2=385).
+// Then rows 6-11 undershoot heavily: actual 1170 (full cap, zero reduction).
+const underActuals: ActualsByInterval = new Map();
+for (let i = 0; i < 6; i++) {
+  underActuals.set(schedule[i].intervalEnding, { lyb1: 385, lyb2: 385 });
+}
+for (let i = 6; i < 12; i++) {
+  underActuals.set(schedule[i].intervalEnding, { lyb1: 585, lyb2: 585 });
+}
+const under = applyActuals(schedule, underActuals, config);
+// First 6 rows on plan: 6 * 33.333 = 200 MWh.
+// Next 6 rows zero loss: still 200 MWh delivered after row 11.
+check("row11 cumMWh (6 on-plan + 6 zero)", under[11].cumMWh, 200, 0.01);
+// Row 12 target: remaining = 1400 MWh; remaining hours = 36 rows * 5/60 = 3 hrs → 466.67 MW.
+check("row12 dynamic target (catch up after stall)", under[12].targetOffloadMW, 1400 / 3, 0.01);
+check("row47 cumMWh (still lands on target)", under[47].cumMWh, 1600, 0.01);
 
-console.log("\nVerifying user actual override wins over AEMO...");
-const ovActual = new Map([[schedule[0].hhEnding, { lyb1Actual: 500 }]]);
-const withOv = applyActuals(schedule, aemo, ovActual, config);
-check("row0 lyb1Actual (override)", withOv[0].lyb1Actual ?? -1, 500);
-check("row0 lyb2Actual (still AEMO)", withOv[0].lyb2Actual ?? -1, 579.8);
-check("row0 overridden.lyb1Actual", withOv[0].overridden.lyb1Actual ? 1 : 0, 1);
-check("row0 overridden.lyb2Actual", withOv[0].overridden.lyb2Actual ? 1 : 0, 0);
+console.log("\nTarget clamps to [0, totalCap]...");
+// Tiny remaining MWh near the end → target stays >= 0. Force cum >> mwReduction by feeding
+// huge actual losses early.
+const overActuals: ActualsByInterval = new Map();
+for (let i = 0; i < 6; i++) {
+  // actual = 0 → mwLoss = 1170 → 97.5 MWh per row → 585 MWh in 6 rows.
+  overActuals.set(schedule[i].intervalEnding, { lyb1: 0, lyb2: 0 });
+}
+const over = applyActuals(schedule, overActuals, config);
+check("row5 cumMWh (massive over)", over[5].cumMWh, 6 * 1170 * (5 / 60), 0.01);
+// Row 6: remaining = 1600 - 585 = 1015; remaining hrs = 42 * 5/60 = 3.5 → 290 MW (still positive).
+check("row6 target after early over", over[6].targetOffloadMW, 1015 / 3.5, 0.01);
+// If cum > mwReduction (negative remaining), target clamps to 0.
+const ridiculous: ActualsByInterval = new Map();
+for (let i = 0; i < 24; i++) {
+  ridiculous.set(schedule[i].intervalEnding, { lyb1: 0, lyb2: 0 });
+}
+const rid = applyActuals(schedule, ridiculous, config);
+// After 24 rows of zero output: cum = 24 * 1170 * 5/60 = 2340 MWh > 1600. Target should clamp to 0.
+check("row24 target clamps to 0 when over-delivered", rid[24].targetOffloadMW, 0);
 
 if (failures.length) {
   console.error(`\nFAILED: ${failures.length} check(s)`);
