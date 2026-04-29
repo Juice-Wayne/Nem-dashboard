@@ -7,21 +7,19 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Info, Copy, Check } from "lucide-react";
 import {
-  applyActuals, buildSchedule, offloadRate, totalCap,
-  type OffloadConfig, type ActualsByHH, type OverridesByHH, type RowOverrides,
+  applyActuals, buildSchedule, offloadRate, totalCap, INTERVAL_MIN,
+  type ActualsByInterval, type OffloadConfig,
 } from "@/lib/offloading/math";
 
 const STORAGE_KEY = "nem-offloading-config";
 
-/** Shared input styling so Date / Time / Number inputs line up visually. */
 const INPUT_CLS =
   "bg-zinc-950 border border-zinc-700 rounded h-8 px-2 text-zinc-200 font-mono text-xs w-full outline-none focus:border-zinc-500";
 
-/** Data provenance color coding. Tint backgrounds let you see at a glance where each
- *  number came from: calculated from inputs (orange), manual input (yellow), or AEMO (blue). */
+/** Data provenance color coding. */
 const SRC = {
   CALC:  "bg-orange-500/10",
-  INPUT: "bg-yellow-400/30",   // highlighter-yellow so editable cells are obvious
+  INPUT: "bg-yellow-400/30",
   AEMO:  "bg-blue-500/15",
 } as const;
 const HEADER_SRC = {
@@ -31,22 +29,18 @@ const HEADER_SRC = {
 } as const;
 
 const DEFAULTS: OffloadConfig = {
-  startISO: nextHalfHourISO(),
+  startISO: nextIntervalISO(),
   durationHrs: 4,
   mwReduction: 1600,
   lyb1Cap: 585,
   lyb2Cap: 585,
 };
 
-// Editable per-row fields users can override or paste-fill.
-type OverrideField = "lyb1Actual" | "lyb2Actual" | "lyb1Gas" | "lyb2Gas";
-const OVERRIDE_FIELDS: OverrideField[] = ["lyb1Actual", "lyb1Gas", "lyb2Actual", "lyb2Gas"];
-
-function nextHalfHourISO(): string {
+function nextIntervalISO(): string {
   const now = new Date();
   const ms = now.getTime();
-  const thirtyMin = 30 * 60 * 1000;
-  return new Date(Math.ceil(ms / thirtyMin) * thirtyMin).toISOString();
+  const stepMs = INTERVAL_MIN * 60 * 1000;
+  return new Date(Math.ceil(ms / stepMs) * stepMs).toISOString();
 }
 
 function loadConfig(): OffloadConfig {
@@ -59,7 +53,12 @@ function loadConfig(): OffloadConfig {
       parsed.mwReduction = parsed.mwhReduction;
       delete parsed.mwhReduction;
     }
-    return { ...DEFAULTS, ...parsed } as OffloadConfig;
+    const merged = { ...DEFAULTS, ...parsed } as OffloadConfig;
+    // Snap any stored startISO that doesn't sit on a 5-min boundary forward to the next 5-min.
+    const t = new Date(merged.startISO).getTime();
+    const stepMs = INTERVAL_MIN * 60 * 1000;
+    if (t % stepMs !== 0) merged.startISO = new Date(Math.ceil(t / stepMs) * stepMs).toISOString();
+    return merged;
   } catch { return DEFAULTS; }
 }
 
@@ -77,7 +76,7 @@ function fmtSignedMWh(v: number): string {
   return v.toFixed(1);
 }
 
-function fmtHHLabel(iso: string): string {
+function fmtIntervalLabel(iso: string): string {
   const d = new Date(iso);
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${String(d.getFullYear()).slice(2)} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
@@ -93,7 +92,7 @@ const fetcher = (url: string) => fetch(url).then((r) => {
 });
 
 interface APIResponse {
-  intervals: Array<{ hhEnding: string; lyb1Mw: number | null; lyb2Mw: number | null }>;
+  intervals: Array<{ intervalEnding: string; lyb1Mw: number | null; lyb2Mw: number | null }>;
 }
 
 export function OffloadingTab() {
@@ -118,69 +117,31 @@ export function OffloadingTab() {
 
   const schedule = useMemo(() => buildSchedule(config), [config]);
 
-  const actuals: ActualsByHH = useMemo(() => {
+  const actuals: ActualsByInterval = useMemo(() => {
     const map = new Map<string, { lyb1: number; lyb2: number }>();
     if (!data) return map;
     for (const iv of data.intervals) {
       if (iv.lyb1Mw != null && iv.lyb2Mw != null) {
-        map.set(iv.hhEnding, { lyb1: iv.lyb1Mw, lyb2: iv.lyb2Mw });
+        map.set(iv.intervalEnding, { lyb1: iv.lyb1Mw, lyb2: iv.lyb2Mw });
       }
     }
     return map;
   }, [data]);
 
-  const [overridesMap, setOverridesMap] = useState<OverridesByHH>(() => new Map());
-
-  const setOverride = (hhEnding: string, field: OverrideField, value: number | undefined) => {
-    setOverridesMap((prev) => {
-      const next = new Map(prev);
-      const row: RowOverrides = { ...(next.get(hhEnding) ?? {}) };
-      if (value === undefined) delete row[field];
-      else row[field] = value;
-      if (Object.keys(row).length === 0) next.delete(hhEnding);
-      else next.set(hhEnding, row);
-      return next;
-    });
-  };
-
   const rows = useMemo(
-    () => applyActuals(schedule, actuals, overridesMap, config),
-    [schedule, actuals, overridesMap, config],
+    () => applyActuals(schedule, actuals, config),
+    [schedule, actuals, config],
   );
-
-  const handlePaste = (rowIdx: number, field: OverrideField, text: string) => {
-    const lines = text.replace(/\r/g, "").split("\n").filter((l) => l.length);
-    const startColIdx = OVERRIDE_FIELDS.indexOf(field);
-    setOverridesMap((prev) => {
-      const next = new Map(prev);
-      lines.forEach((line, lineIdx) => {
-        const cells = line.split("\t");
-        cells.forEach((raw, colIdx) => {
-          const n = Number(raw);
-          if (!Number.isFinite(n)) return;
-          const targetRowIdx = rowIdx + lineIdx;
-          const targetField = OVERRIDE_FIELDS[startColIdx + colIdx];
-          const targetRow = rows[targetRowIdx];
-          if (!targetRow || !targetField) return;
-          const existing: RowOverrides = { ...(next.get(targetRow.hhEnding) ?? {}) };
-          existing[targetField] = n;
-          next.set(targetRow.hhEnding, existing);
-        });
-      });
-      return next;
-    });
-  };
 
   const update = <K extends keyof OffloadConfig>(key: K, value: OffloadConfig[K]) =>
     setConfig((prev) => ({ ...prev, [key]: value }));
 
-  // Summary text shown at top + copied to clipboard.
   const summaryText = useMemo(() => {
     const startLabel = fmtTimeOnly(config.startISO);
     const endISO = new Date(new Date(config.startISO).getTime() + config.durationHrs * 3600_000).toISOString();
     const endLabel = fmtTimeOnly(endISO);
     const forecastMW = rows[0]?.forecastMW ?? 0;
-    return `Coal offloading event — LYB reducing to ~${forecastMW.toFixed(0)} MW from HH ${startLabel} to ${endLabel}. Target ${config.mwReduction.toFixed(0)} MWh reduction.`;
+    return `Coal offloading event — LYB reducing to ~${forecastMW.toFixed(0)} MW from interval ${startLabel} to ${endLabel}. Target ${config.mwReduction.toFixed(0)} MWh reduction.`;
   }, [config, rows]);
 
   return (
@@ -223,7 +184,7 @@ export function OffloadingTab() {
             </Field>
           </div>
           <div className="text-[11px] text-zinc-400 flex gap-6">
-            <span>Offload rate: <span className="text-zinc-200 font-mono">{offloadRate(config).toFixed(1)} MW/hh</span></span>
+            <span>Initial offload rate: <span className="text-zinc-200 font-mono">{offloadRate(config).toFixed(1)} MW</span></span>
             <span>Total capacity: <span className="text-zinc-200 font-mono">{totalCap(config)} MW</span></span>
           </div>
         </CardContent>
@@ -235,85 +196,37 @@ export function OffloadingTab() {
             <Table>
               <TableHeader>
                 <TableRow className="border-white/5">
-                  <TableHead className={`whitespace-nowrap ${HEADER_SRC.CALC}`}>HH ending<br/><span className="text-[9px] font-normal text-zinc-500">Market Time</span></TableHead>
-                  <TableHead className={`text-right whitespace-nowrap ${HEADER_SRC.CALC}`}>Target MW<br/><span className="text-[9px] font-normal text-zinc-500">/ hh</span></TableHead>
+                  <TableHead className={`whitespace-nowrap ${HEADER_SRC.CALC}`}>Interval ending<br/><span className="text-[9px] font-normal text-zinc-500">Market Time</span></TableHead>
+                  <TableHead className={`text-right whitespace-nowrap ${HEADER_SRC.CALC}`}>Target MW<br/><span className="text-[9px] font-normal text-zinc-500">/ 5 min</span></TableHead>
                   <TableHead className={`text-right whitespace-nowrap ${HEADER_SRC.CALC}`}>Target<br/><span className="text-[9px] font-normal text-zinc-500">Offload MWh</span></TableHead>
                   <TableHead className={`text-right whitespace-nowrap ${HEADER_SRC.CALC}`}>Forecast<br/><span className="text-[9px] font-normal text-zinc-500">MW</span></TableHead>
-                  <TableHead className={`text-right whitespace-nowrap ${HEADER_SRC.CALC}`}>Actual<br/><span className="text-[9px] font-normal text-zinc-500">MW</span></TableHead>
+                  <TableHead className={`text-right whitespace-nowrap ${HEADER_SRC.AEMO}`}>Actual<br/><span className="text-[9px] font-normal text-zinc-500">MW</span></TableHead>
                   <TableHead className={`text-right whitespace-nowrap ${HEADER_SRC.CALC}`}>MW Loss</TableHead>
                   <TableHead className={`text-right whitespace-nowrap ${HEADER_SRC.CALC}`}>Act Offload<br/><span className="text-[9px] font-normal text-zinc-500">MWh</span></TableHead>
                   <TableHead className={`text-right whitespace-nowrap ${HEADER_SRC.CALC}`}>Cum MWh<br/><span className="text-[9px] font-normal text-zinc-500">Loss</span></TableHead>
                   <TableHead className={`text-right whitespace-nowrap border-l border-white/10 ${HEADER_SRC.CALC}`}>LYB1<br/><span className="text-[9px] font-normal text-zinc-500">Bid target</span></TableHead>
                   <TableHead className={`text-right whitespace-nowrap ${HEADER_SRC.CALC}`}>LYB2<br/><span className="text-[9px] font-normal text-zinc-500">Bid target</span></TableHead>
                   <TableHead className={`text-right whitespace-nowrap ${HEADER_SRC.CALC}`}>Total<br/><span className="text-[9px] font-normal text-zinc-500">bid</span></TableHead>
-                  <TableHead className={`text-right whitespace-nowrap border-l border-white/10 ${HEADER_SRC.AEMO}`}>LYB1<br/><span className="text-[9px] font-normal text-zinc-500">actual</span></TableHead>
-                  <TableHead className={`text-right whitespace-nowrap ${HEADER_SRC.INPUT}`}>Less gas<br/><span className="text-[9px] font-normal text-zinc-500">LYB1</span></TableHead>
-                  <TableHead className={`text-right whitespace-nowrap ${HEADER_SRC.AEMO}`}>LYB2<br/><span className="text-[9px] font-normal text-zinc-500">actual</span></TableHead>
-                  <TableHead className={`text-right whitespace-nowrap ${HEADER_SRC.INPUT}`}>Less gas<br/><span className="text-[9px] font-normal text-zinc-500">LYB2</span></TableHead>
-                  <TableHead className={`text-right whitespace-nowrap ${HEADER_SRC.CALC}`}>Total<br/><span className="text-[9px] font-normal text-zinc-500">actual</span></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {rows.map((r, rowIdx) => {
-                  const bidTotal = r.lyb1TargetMW + r.lyb2TargetMW;
-                  // Display fallback: when no unit actual yet, show forecast split so the row reads sensibly.
-                  const lyb1Display = r.lyb1Actual ?? r.lyb1TargetMW;
-                  const lyb2Display = r.lyb2Actual ?? r.lyb2TargetMW;
-                  return (
-                    <TableRow key={r.hhEnding} className="border-white/5 font-mono text-xs">
-                      <TableCell className={`whitespace-nowrap ${SRC.CALC}`}>{fmtHHLabel(r.hhEnding)}</TableCell>
-                      <TableCell className={`text-right ${SRC.CALC}`}>{fmtMW(r.targetOffloadMW)}</TableCell>
-                      <TableCell className={`text-right text-zinc-400 ${SRC.CALC}`}>{fmtSignedMWh(r.targetCumMWh)}</TableCell>
-                      <TableCell className={`text-right ${SRC.CALC}`}>{fmtMW(r.forecastMW)}</TableCell>
-                      <TableCell className={`text-right ${SRC.CALC} ${r.totalActualMW == null ? "italic text-zinc-500" : ""}`}>
-                        {fmtMW(r.totalActualMW ?? r.forecastMW)}
-                      </TableCell>
-                      <TableCell className={`text-right ${SRC.CALC}`}>{fmtMW(r.mwLoss)}</TableCell>
-                      <TableCell className={`text-right ${SRC.CALC}`}>{fmtMW(r.mwhThisHH)}</TableCell>
-                      <TableCell className={`text-right ${SRC.CALC}`}>{fmtMW(r.cumMWh)}</TableCell>
-                      <TableCell className={`text-right border-l border-white/10 ${SRC.CALC}`}>{fmtMW(r.lyb1TargetMW)}</TableCell>
-                      <TableCell className={`text-right ${SRC.CALC}`}>{fmtMW(r.lyb2TargetMW)}</TableCell>
-                      <TableCell className={`text-right ${SRC.CALC}`}>{fmtMW(bidTotal)}</TableCell>
-                      <EditableCell
-                        className={`border-l border-white/10 ${r.overridden.lyb1Actual ? SRC.INPUT : SRC.AEMO}`}
-                        value={lyb1Display}
-                        isOverride={r.overridden.lyb1Actual}
-                        isFallback={r.lyb1Actual == null}
-                        onCommit={(v) => setOverride(r.hhEnding, "lyb1Actual", v)}
-                        onRevert={() => setOverride(r.hhEnding, "lyb1Actual", undefined)}
-                        onPaste={(text) => handlePaste(rowIdx, "lyb1Actual", text)}
-                      />
-                      <EditableCell
-                        className={SRC.INPUT}
-                        value={r.lyb1Gas}
-                        isOverride={r.overridden.lyb1Gas}
-                        onCommit={(v) => setOverride(r.hhEnding, "lyb1Gas", v)}
-                        onRevert={() => setOverride(r.hhEnding, "lyb1Gas", undefined)}
-                        onPaste={(text) => handlePaste(rowIdx, "lyb1Gas", text)}
-                      />
-                      <EditableCell
-                        className={r.overridden.lyb2Actual ? SRC.INPUT : SRC.AEMO}
-                        value={lyb2Display}
-                        isOverride={r.overridden.lyb2Actual}
-                        isFallback={r.lyb2Actual == null}
-                        onCommit={(v) => setOverride(r.hhEnding, "lyb2Actual", v)}
-                        onRevert={() => setOverride(r.hhEnding, "lyb2Actual", undefined)}
-                        onPaste={(text) => handlePaste(rowIdx, "lyb2Actual", text)}
-                      />
-                      <EditableCell
-                        className={SRC.INPUT}
-                        value={r.lyb2Gas}
-                        isOverride={r.overridden.lyb2Gas}
-                        onCommit={(v) => setOverride(r.hhEnding, "lyb2Gas", v)}
-                        onRevert={() => setOverride(r.hhEnding, "lyb2Gas", undefined)}
-                        onPaste={(text) => handlePaste(rowIdx, "lyb2Gas", text)}
-                      />
-                      <TableCell className={`text-right font-medium ${SRC.CALC} ${r.totalActualMW == null ? "italic text-zinc-500" : "text-zinc-100"}`}>
-                        {fmtMW(r.totalActualMW ?? r.forecastMW)}
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
+                {rows.map((r) => (
+                  <TableRow key={r.intervalEnding} className="border-white/5 font-mono text-xs">
+                    <TableCell className={`whitespace-nowrap ${SRC.CALC}`}>{fmtIntervalLabel(r.intervalEnding)}</TableCell>
+                    <TableCell className={`text-right ${SRC.CALC}`}>{fmtMW(r.targetOffloadMW)}</TableCell>
+                    <TableCell className={`text-right text-zinc-400 ${SRC.CALC}`}>{fmtSignedMWh(r.targetCumMWh)}</TableCell>
+                    <TableCell className={`text-right ${SRC.CALC}`}>{fmtMW(r.forecastMW)}</TableCell>
+                    <TableCell className={`text-right ${SRC.AEMO} ${r.totalActualMW == null ? "italic text-zinc-500" : ""}`}>
+                      {fmtMW(r.totalActualMW ?? r.forecastMW)}
+                    </TableCell>
+                    <TableCell className={`text-right ${SRC.CALC}`}>{fmtMW(r.mwLoss)}</TableCell>
+                    <TableCell className={`text-right ${SRC.CALC}`}>{fmtMW(r.mwhThisInterval)}</TableCell>
+                    <TableCell className={`text-right ${SRC.CALC}`}>{fmtMW(r.cumMWh)}</TableCell>
+                    <TableCell className={`text-right border-l border-white/10 ${SRC.CALC}`}>{fmtMW(r.lyb1TargetMW)}</TableCell>
+                    <TableCell className={`text-right ${SRC.CALC}`}>{fmtMW(r.lyb2TargetMW)}</TableCell>
+                    <TableCell className={`text-right ${SRC.CALC}`}>{fmtMW(r.lyb1TargetMW + r.lyb2TargetMW)}</TableCell>
+                  </TableRow>
+                ))}
               </TableBody>
             </Table>
           </div>
@@ -338,7 +251,7 @@ function DebugLegend() {
         <Info className="h-3 w-3 text-zinc-600 hover:text-zinc-400 cursor-help" />
         <div className="invisible group-hover:visible opacity-0 group-hover:opacity-100 transition-opacity absolute left-5 top-1/2 -translate-y-1/2 z-20 bg-zinc-900 border border-zinc-700 rounded-md p-3 shadow-xl w-max">
           <div className="flex flex-col gap-2 text-xs">
-            <Row bg={SRC.INPUT} label="Manual input" example="e.g. Duration, Total MW reduction, LYB capacities, Less gas" />
+            <Row bg={SRC.INPUT} label="Manual input" example="e.g. Duration, Total MW reduction, LYB capacities" />
             <Row bg={SRC.AEMO} label="From AEMO" example="Actuals pulled from DISPATCHSCADA (LOYYB1, LOYYB2)" />
             <Row bg={SRC.CALC} label="Calculated" example="Forecast, MW Loss, Cum MWh, Bid targets (derived from inputs)" />
           </div>
@@ -517,75 +430,3 @@ function withTime(iso: string, timeStr: string): string {
   return new Date(`${toDateInput(iso)}T${timeStr}`).toISOString();
 }
 
-function EditableCell({
-  value, isOverride, isFallback = false, className, onCommit, onRevert, onPaste,
-}: {
-  value: number | null;
-  isOverride: boolean;
-  isFallback?: boolean;
-  className?: string;
-  onCommit: (v: number) => void;
-  onRevert: () => void;
-  onPaste: (text: string) => void;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState("");
-
-  const display = value == null || !Number.isFinite(value) ? "—" : value.toFixed(1);
-
-  const startEdit = () => { setDraft(display === "—" ? "" : display); setEditing(true); };
-  const commit = () => {
-    const n = Number(draft);
-    if (Number.isFinite(n)) onCommit(n);
-    setEditing(false);
-  };
-  const cancel = () => setEditing(false);
-
-  return (
-    <TableCell
-      className={`text-right relative cursor-text ${isOverride ? "border-l-2 border-l-blue-500" : ""} ${className ?? ""}`}
-      onClick={(e) => { if (!editing) { e.stopPropagation(); startEdit(); } }}
-    >
-      {editing ? (
-        <input
-          autoFocus
-          size={1}
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={commit}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") commit();
-            else if (e.key === "Escape") cancel();
-          }}
-          onPaste={(e) => {
-            const text = e.clipboardData.getData("text");
-            if (text.includes("\t") || text.includes("\n")) {
-              e.preventDefault();
-              onPaste(text);
-              setEditing(false);
-            }
-          }}
-          className="w-full min-w-0 bg-zinc-950 border border-blue-500 rounded px-1 py-0 text-right font-mono text-xs text-zinc-100 outline-none"
-        />
-      ) : (
-        <>
-          <span
-            className={isFallback ? "italic text-zinc-500" : undefined}
-            title={isFallback ? "Forecast — click to enter actual" : undefined}
-          >
-            {display}
-          </span>
-          {isOverride && (
-            <button
-              onClick={(e) => { e.stopPropagation(); onRevert(); }}
-              className="ml-1 opacity-40 hover:opacity-100 text-[10px]"
-              title="Revert to AEMO / default"
-            >
-              ↺
-            </button>
-          )}
-        </>
-      )}
-    </TableCell>
-  );
-}
