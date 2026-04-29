@@ -97,11 +97,9 @@ export function applyActuals(
     const row = schedule[i];
     const aemo = actuals.get(row.intervalEnding);
 
-    const remainingRows = schedule.length - i;
-    const remainingHours = remainingRows * intervalHours;
+    const remainingHours = (schedule.length - i) * intervalHours;
     const remainingMWh = config.mwReduction - cumMWh;
-    const rawTarget =
-      remainingHours > 0 ? remainingMWh / remainingHours : remainingMWh / intervalHours;
+    const rawTarget = remainingMWh / remainingHours;
     const targetOffloadMW = Math.max(0, Math.min(cap, rawTarget));
 
     const lyb1Target = Math.max(0, config.lyb1Cap - targetOffloadMW / 2);
@@ -133,23 +131,4 @@ export function applyActuals(
     });
   }
   return result;
-}
-
-/** Progress state for status reporting (kept for parity — not currently rendered). */
-export type ProgressState = "onTrack" | "behind" | "over";
-
-export function progressState(
-  rows: ComputedRow[],
-  config: OffloadConfig,
-  nowMs = Date.now(),
-): ProgressState {
-  const cumTotal = rows[rows.length - 1]?.cumMWh ?? 0;
-  if (cumTotal > config.mwReduction * 1.1) return "over";
-  const startMs = new Date(config.startISO).getTime();
-  const elapsedHrs = Math.max(0, (nowMs - startMs) / 3_600_000);
-  if (elapsedHrs >= config.durationHrs)
-    return cumTotal >= config.mwReduction * 0.9 ? "onTrack" : "behind";
-  const target = (config.mwReduction / config.durationHrs) * elapsedHrs;
-  if (cumTotal < target * 0.9) return "behind";
-  return "onTrack";
 }
