@@ -4,13 +4,15 @@ import { fetchArchiveDay } from "@/lib/nemweb";
 const SCADA_TABLES = new Set(["DISPATCH_UNIT_SCADA"]);
 
 interface IntervalResponse {
-  /** ISO timestamp for the half-hour ending (UTC). */
-  hhEnding: string;
-  /** Average LYB1 MW across the six 5-min intervals in this HH. */
+  /** ISO timestamp for the 5-min interval ending (UTC). */
+  intervalEnding: string;
+  /** LYB1 MW for this 5-min interval. */
   lyb1Mw: number | null;
-  /** Average LYB2 MW across the six 5-min intervals in this HH. */
+  /** LYB2 MW for this 5-min interval. */
   lyb2Mw: number | null;
 }
+
+const INTERVAL_MIN = 5;
 
 function isoToAemoDate(iso: string): string {
   // "2026-04-24T13:00:00.000Z" → "2026-04-24"
@@ -21,13 +23,14 @@ function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-/** Generate HH-ending ISO timestamps covering [startISO, startISO + durationHrs). */
-function enumerateHHs(startISO: string, durationHrs: number): string[] {
+/** Generate 5-min interval-ending ISO timestamps covering [startISO, startISO + durationHrs). */
+function enumerateIntervals(startISO: string, durationHrs: number): string[] {
   const out: string[] = [];
   const start = new Date(startISO).getTime();
-  const rows = Math.round(durationHrs * 2);
+  const rows = Math.round(durationHrs * (60 / INTERVAL_MIN));
+  const stepMs = INTERVAL_MIN * 60 * 1000;
   for (let i = 0; i < rows; i++) {
-    out.push(new Date(start + i * 30 * 60 * 1000).toISOString());
+    out.push(new Date(start + i * stepMs).toISOString());
   }
   return out;
 }
@@ -35,13 +38,6 @@ function enumerateHHs(startISO: string, durationHrs: number): string[] {
 /** AEMO SETTLEMENTDATE is "2026/04/24 13:05:00" — convert to ISO UTC. */
 function aemoToIso(aemo: string): string {
   return new Date(aemo.replace(/\//g, "-").replace(" ", "T") + "Z").toISOString();
-}
-
-/** Bucket the 5-min interval ending at `ts` into its HH-ending. 13:05→13:30; 13:30→13:30; 13:35→14:00. */
-function bucketHHEnding(intervalEndISO: string): string {
-  const ms = new Date(intervalEndISO).getTime();
-  const thirtyMin = 30 * 60 * 1000;
-  return new Date(Math.ceil(ms / thirtyMin) * thirtyMin).toISOString();
 }
 
 export async function GET(request: NextRequest) {
@@ -57,18 +53,19 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "durationHrs must be 1..24" }, { status: 400 });
     }
 
-    const hhs = enumerateHHs(startISO, durationHrs);
-    // Collect unique dates we need to fetch (past only — today is not archived yet).
+    const intervals = enumerateIntervals(startISO, durationHrs);
+    const wanted = new Set(intervals);
+
     const today = todayIso();
     const datesNeeded = new Set<string>();
-    for (const hh of hhs) {
-      const d = isoToAemoDate(hh);
+    for (const iv of intervals) {
+      const d = isoToAemoDate(iv);
       if (d < today) datesNeeded.add(d);
     }
 
-    // Map hhEnding → { LYB1: values[], LYB2: values[] } for averaging.
-    const buckets = new Map<string, { LOYYB1: number[]; LOYYB2: number[] }>();
-    for (const hh of hhs) buckets.set(hh, { LOYYB1: [], LOYYB2: [] });
+    // Map intervalEnding → { LYB1, LYB2 } MW (latest seen wins; AEMO 5-min is unique).
+    const buckets = new Map<string, { LOYYB1: number | null; LOYYB2: number | null }>();
+    for (const iv of intervals) buckets.set(iv, { LOYYB1: null, LOYYB2: null });
 
     const results = await Promise.allSettled(
       Array.from(datesNeeded).map((date) =>
@@ -77,7 +74,10 @@ export async function GET(request: NextRequest) {
     );
     for (const r of results) {
       if (r.status === "rejected") {
-        console.warn("[offloading] SCADA fetch failed:", r.reason instanceof Error ? r.reason.message : r.reason);
+        console.warn(
+          "[offloading] SCADA fetch failed:",
+          r.reason instanceof Error ? r.reason.message : r.reason,
+        );
         continue;
       }
       const rows = r.value.tables.get("DISPATCH_UNIT_SCADA") ?? [];
@@ -85,23 +85,21 @@ export async function GET(request: NextRequest) {
         const duid = row.DUID;
         if (duid !== "LOYYB1" && duid !== "LOYYB2") continue;
         const intervalEndISO = aemoToIso(row.SETTLEMENTDATE);
-        const hhEnd = bucketHHEnding(intervalEndISO);
-        const bucket = buckets.get(hhEnd);
-        if (!bucket) continue;
+        if (!wanted.has(intervalEndISO)) continue;
         const mw = Number(row.SCADAVALUE);
         if (!Number.isFinite(mw)) continue;
-        bucket[duid].push(mw);
+        const bucket = buckets.get(intervalEndISO)!;
+        bucket[duid] = mw;
       }
     }
 
-    const intervals: IntervalResponse[] = hhs.map((hh) => {
-      const b = buckets.get(hh)!;
-      const avg = (arr: number[]) => (arr.length ? arr.reduce((a, v) => a + v, 0) / arr.length : null);
-      return { hhEnding: hh, lyb1Mw: avg(b.LOYYB1), lyb2Mw: avg(b.LOYYB2) };
+    const response: IntervalResponse[] = intervals.map((iv) => {
+      const b = buckets.get(iv)!;
+      return { intervalEnding: iv, lyb1Mw: b.LOYYB1, lyb2Mw: b.LOYYB2 };
     });
 
     return NextResponse.json(
-      { intervals },
+      { intervals: response },
       { headers: { "Cache-Control": "public, s-maxage=60, stale-while-revalidate=300" } },
     );
   } catch (e) {
