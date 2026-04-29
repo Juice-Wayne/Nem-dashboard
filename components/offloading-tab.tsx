@@ -7,8 +7,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Info, Copy, Check } from "lucide-react";
 import {
-  applyActuals, buildSchedule, offloadRate, totalCap, snapToInterval,
-  type ActualsByInterval, type OffloadConfig,
+  computeRows, snapToInterval, totalCap, reductionMW,
+  type PDByInterval, type OffloadConfig,
 } from "@/lib/offloading/math";
 
 const STORAGE_KEY = "nem-offloading-config";
@@ -16,29 +16,28 @@ const STORAGE_KEY = "nem-offloading-config";
 const INPUT_CLS =
   "bg-zinc-950 border border-zinc-700 rounded h-8 px-2 text-zinc-200 font-mono text-xs w-full outline-none focus:border-zinc-500";
 
-/** Data provenance color coding. */
 const SRC = {
   CALC:  "bg-orange-500/10",
   INPUT: "bg-yellow-400/30",
   AEMO:  "bg-blue-500/15",
+  BID:   "bg-purple-500/15",
 } as const;
 const HEADER_SRC = {
   CALC:  "bg-orange-500/25",
   INPUT: "bg-yellow-400/50",
   AEMO:  "bg-blue-500/30",
+  BID:   "bg-purple-500/30",
 } as const;
 
 const DEFAULTS: OffloadConfig = {
-  startISO: nextIntervalISO(),
+  startISO: snapToInterval(Date.now()),
   durationHrs: 4,
   mwReduction: 1600,
   lyb1Cap: 585,
   lyb2Cap: 585,
+  lyb1RampRate: 10,
+  lyb2RampRate: 10,
 };
-
-function nextIntervalISO(): string {
-  return snapToInterval(Date.now());
-}
 
 function loadConfig(): OffloadConfig {
   if (typeof window === "undefined") return DEFAULTS;
@@ -65,11 +64,6 @@ function fmtMW(v: number | null): string {
   return v.toFixed(1);
 }
 
-function fmtSignedMWh(v: number): string {
-  if (!Number.isFinite(v)) return "—";
-  return v.toFixed(1);
-}
-
 function fmtIntervalLabel(iso: string): string {
   const d = new Date(iso);
   const pad = (n: number) => String(n).padStart(2, "0");
@@ -86,7 +80,13 @@ const fetcher = (url: string) => fetch(url).then((r) => {
 });
 
 interface APIResponse {
-  intervals: Array<{ intervalEnding: string; lyb1Mw: number | null; lyb2Mw: number | null }>;
+  intervals: Array<{
+    intervalEnding: string;
+    scadaLyb1: number | null;
+    scadaLyb2: number | null;
+    pdLyb1: number | null;
+    pdLyb2: number | null;
+  }>;
 }
 
 export function OffloadingTab() {
@@ -109,22 +109,18 @@ export function OffloadingTab() {
 
   const { data } = useSWR<APIResponse>(apiUrl, fetcher, { refreshInterval: 30_000 });
 
-  const schedule = useMemo(() => buildSchedule(config), [config]);
-
-  const actuals: ActualsByInterval = useMemo(() => {
-    const map = new Map<string, { lyb1: number; lyb2: number }>();
+  const pdByInterval: PDByInterval = useMemo(() => {
+    const map = new Map<string, { lyb1: number | null; lyb2: number | null }>();
     if (!data) return map;
     for (const iv of data.intervals) {
-      if (iv.lyb1Mw != null && iv.lyb2Mw != null) {
-        map.set(iv.intervalEnding, { lyb1: iv.lyb1Mw, lyb2: iv.lyb2Mw });
-      }
+      map.set(iv.intervalEnding, { lyb1: iv.pdLyb1, lyb2: iv.pdLyb2 });
     }
     return map;
   }, [data]);
 
   const rows = useMemo(
-    () => applyActuals(schedule, actuals, config),
-    [schedule, actuals, config],
+    () => computeRows(config, pdByInterval),
+    [config, pdByInterval],
   );
 
   const update = <K extends keyof OffloadConfig>(key: K, value: OffloadConfig[K]) =>
@@ -134,20 +130,21 @@ export function OffloadingTab() {
     const startLabel = fmtTimeOnly(config.startISO);
     const endISO = new Date(new Date(config.startISO).getTime() + config.durationHrs * 3600_000).toISOString();
     const endLabel = fmtTimeOnly(endISO);
-    // Row 0 = initial uniform target. Stays stable as catch-up redistributes later rows,
-    // so the copy reads the same before and during the event.
-    const forecastMW = rows[0]?.forecastMW ?? 0;
-    return `Coal offloading event — LYB reducing to ~${forecastMW.toFixed(0)} MW from interval ${startLabel} to ${endLabel}. Target ${config.mwReduction.toFixed(0)} MWh reduction.`;
-  }, [config, rows]);
+    return `Coal offloading event — LYB reducing ${config.mwReduction.toFixed(0)} MWh from ${startLabel} to ${endLabel}.`;
+  }, [config]);
+
+  const copyColumn = (values: Array<number | null>) => {
+    const text = values.map((v) => (v == null ? "" : v.toFixed(1))).join("\n");
+    void navigator.clipboard.writeText(text);
+  };
 
   return (
     <div className="space-y-4">
       <SummaryCard text={summaryText} />
-      <DebugLegend />
 
       <Card className="bg-zinc-900/60 border-white/5">
         <CardContent className="p-3 space-y-2">
-          <div className="grid grid-cols-2 md:grid-cols-7 gap-2 text-xs">
+          <div className="grid grid-cols-2 md:grid-cols-8 gap-2 text-xs">
             <Field label="Start date">
               <input
                 type="date"
@@ -166,21 +163,27 @@ export function OffloadingTab() {
                 onChange={(hhmm24) => update("startISO", withTime(config.startISO, hhmm24))}
               />
             </Field>
-            <Field label="Duration (hrs)" tooltip="Input the total duration in hours of the offloading event.">
+            <Field label="Duration (hrs)" tooltip="Total event duration in hours.">
               <NumInput className={SRC.INPUT} value={config.durationHrs} onChange={(v) => update("durationHrs", v)} min={1} max={99} maxDigits={2} />
             </Field>
-            <Field label="Total MW reduction" tooltip="Input the total amount of MW needed to offload across the whole event.">
+            <Field label="Total MWh reduction" tooltip="Total MWh to offload across the whole event.">
               <NumInput className={SRC.INPUT} value={config.mwReduction} onChange={(v) => update("mwReduction", v)} min={0} />
             </Field>
-            <Field label="LYB1 capacity (MW)">
+            <Field label="LYB1 cap (MW)">
               <NumInput className={SRC.INPUT} value={config.lyb1Cap} onChange={(v) => update("lyb1Cap", v)} min={0} max={999} maxDigits={3} />
             </Field>
-            <Field label="LYB2 capacity (MW)">
+            <Field label="LYB2 cap (MW)">
               <NumInput className={SRC.INPUT} value={config.lyb2Cap} onChange={(v) => update("lyb2Cap", v)} min={0} max={999} maxDigits={3} />
+            </Field>
+            <Field label="LYB1 ramp (MW/min)" tooltip="LYB1 ramp rate of change.">
+              <NumInput className={SRC.INPUT} value={config.lyb1RampRate} onChange={(v) => update("lyb1RampRate", v)} min={0} max={99} maxDigits={2} />
+            </Field>
+            <Field label="LYB2 ramp (MW/min)" tooltip="LYB2 ramp rate of change.">
+              <NumInput className={SRC.INPUT} value={config.lyb2RampRate} onChange={(v) => update("lyb2RampRate", v)} min={0} max={99} maxDigits={2} />
             </Field>
           </div>
           <div className="text-[11px] text-zinc-400 flex gap-6">
-            <span>Initial offload rate: <span className="text-zinc-200 font-mono">{offloadRate(config).toFixed(1)} MW</span></span>
+            <span>Reduction rate: <span className="text-zinc-200 font-mono">{reductionMW(config).toFixed(1)} MW</span></span>
             <span>Total capacity: <span className="text-zinc-200 font-mono">{totalCap(config)} MW</span></span>
           </div>
         </CardContent>
@@ -192,35 +195,39 @@ export function OffloadingTab() {
             <Table>
               <TableHeader>
                 <TableRow className="border-white/5">
-                  <TableHead className={`whitespace-nowrap ${HEADER_SRC.CALC}`}>Interval ending<br/><span className="text-[9px] font-normal text-zinc-500">Market Time</span></TableHead>
-                  <TableHead className={`text-right whitespace-nowrap ${HEADER_SRC.CALC}`}>Target MW<br/><span className="text-[9px] font-normal text-zinc-500">/ 5 min</span></TableHead>
-                  <TableHead className={`text-right whitespace-nowrap ${HEADER_SRC.CALC}`}>Target<br/><span className="text-[9px] font-normal text-zinc-500">Offload MWh</span></TableHead>
-                  <TableHead className={`text-right whitespace-nowrap ${HEADER_SRC.CALC}`}>Forecast<br/><span className="text-[9px] font-normal text-zinc-500">MW</span></TableHead>
-                  <TableHead className={`text-right whitespace-nowrap ${HEADER_SRC.AEMO}`}>Actual<br/><span className="text-[9px] font-normal text-zinc-500">MW</span></TableHead>
-                  <TableHead className={`text-right whitespace-nowrap ${HEADER_SRC.CALC}`}>MW Loss</TableHead>
-                  <TableHead className={`text-right whitespace-nowrap ${HEADER_SRC.CALC}`}>Act Offload<br/><span className="text-[9px] font-normal text-zinc-500">MWh</span></TableHead>
-                  <TableHead className={`text-right whitespace-nowrap ${HEADER_SRC.CALC}`}>Cum MWh<br/><span className="text-[9px] font-normal text-zinc-500">Loss</span></TableHead>
-                  <TableHead className={`text-right whitespace-nowrap border-l border-white/10 ${HEADER_SRC.CALC}`}>LYB1<br/><span className="text-[9px] font-normal text-zinc-500">Bid target</span></TableHead>
-                  <TableHead className={`text-right whitespace-nowrap ${HEADER_SRC.CALC}`}>LYB2<br/><span className="text-[9px] font-normal text-zinc-500">Bid target</span></TableHead>
-                  <TableHead className={`text-right whitespace-nowrap ${HEADER_SRC.CALC}`}>Total<br/><span className="text-[9px] font-normal text-zinc-500">bid</span></TableHead>
+                  <TableHead className={`whitespace-nowrap ${HEADER_SRC.CALC}`}>
+                    Interval ending<br/><span className="text-[9px] font-normal text-zinc-500">Market Time</span>
+                  </TableHead>
+                  <TableHead className={`text-right whitespace-nowrap ${HEADER_SRC.AEMO}`}>
+                    PD Gen<br/><span className="text-[9px] font-normal text-zinc-500">MW (sum)</span>
+                  </TableHead>
+                  <TableHead className={`text-right whitespace-nowrap ${HEADER_SRC.CALC}`}>
+                    Reduction<br/><span className="text-[9px] font-normal text-zinc-500">MW / 5 min</span>
+                  </TableHead>
+                  <TableHead className={`text-right whitespace-nowrap ${HEADER_SRC.CALC}`}>
+                    Avg target<br/><span className="text-[9px] font-normal text-zinc-500">MW</span>
+                  </TableHead>
+                  <TableHead className={`text-right whitespace-nowrap ${HEADER_SRC.BID}`}>
+                    <CopyableHeader label="LYB1 Bid" subtitle="MW" onCopy={() => copyColumn(rows.map((r) => r.lyb1BidMW))} />
+                  </TableHead>
+                  <TableHead className={`text-right whitespace-nowrap ${HEADER_SRC.BID}`}>
+                    <CopyableHeader label="LYB2 Bid" subtitle="MW" onCopy={() => copyColumn(rows.map((r) => r.lyb2BidMW))} />
+                  </TableHead>
+                  <TableHead className={`text-right whitespace-nowrap ${HEADER_SRC.CALC}`}>
+                    Cum delivered<br/><span className="text-[9px] font-normal text-zinc-500">MWh</span>
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {rows.map((r) => (
                   <TableRow key={r.intervalEnding} className="border-white/5 font-mono text-xs">
                     <TableCell className={`whitespace-nowrap ${SRC.CALC}`}>{fmtIntervalLabel(r.intervalEnding)}</TableCell>
-                    <TableCell className={`text-right ${SRC.CALC}`}>{fmtMW(r.targetOffloadMW)}</TableCell>
-                    <TableCell className={`text-right text-zinc-400 ${SRC.CALC}`}>{fmtSignedMWh(r.targetCumMWh)}</TableCell>
-                    <TableCell className={`text-right ${SRC.CALC}`}>{fmtMW(r.forecastMW)}</TableCell>
-                    <TableCell className={`text-right ${SRC.AEMO} ${r.totalActualMW == null ? "italic text-zinc-500" : ""}`}>
-                      {fmtMW(r.totalActualMW ?? r.forecastMW)}
-                    </TableCell>
-                    <TableCell className={`text-right ${SRC.CALC}`}>{fmtMW(r.mwLoss)}</TableCell>
-                    <TableCell className={`text-right ${SRC.CALC}`}>{fmtMW(r.mwhThisInterval)}</TableCell>
-                    <TableCell className={`text-right ${SRC.CALC}`}>{fmtMW(r.cumMWh)}</TableCell>
-                    <TableCell className={`text-right border-l border-white/10 ${SRC.CALC}`}>{fmtMW(r.lyb1TargetMW)}</TableCell>
-                    <TableCell className={`text-right ${SRC.CALC}`}>{fmtMW(r.lyb2TargetMW)}</TableCell>
-                    <TableCell className={`text-right ${SRC.CALC}`}>{fmtMW(r.lyb1TargetMW + r.lyb2TargetMW)}</TableCell>
+                    <TableCell className={`text-right ${SRC.AEMO}`}>{fmtMW(r.pdTotal)}</TableCell>
+                    <TableCell className={`text-right ${SRC.CALC}`}>{fmtMW(r.reductionMW)}</TableCell>
+                    <TableCell className={`text-right ${SRC.CALC}`}>{fmtMW(r.avgTargetTotal)}</TableCell>
+                    <TableCell className={`text-right ${SRC.BID}`}>{fmtMW(r.lyb1BidMW)}</TableCell>
+                    <TableCell className={`text-right ${SRC.BID}`}>{fmtMW(r.lyb2BidMW)}</TableCell>
+                    <TableCell className={`text-right ${SRC.CALC}`}>{fmtMW(r.cumReductionMWh)}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -232,41 +239,42 @@ export function OffloadingTab() {
   );
 }
 
-function DebugLegend() {
-  const Row = ({ bg, label, example }: { bg: string; label: string; example: string }) => (
-    <div className="flex items-center gap-2">
-      <span className={`${bg} h-4 w-4 rounded border border-white/10 shrink-0`} />
-      <span className="text-zinc-200 font-medium whitespace-nowrap">{label}</span>
-      <span className="text-zinc-500 text-[10px]">{example}</span>
-    </div>
-  );
+function CopyableHeader({ label, subtitle, onCopy }: { label: string; subtitle: string; onCopy: () => void }) {
+  const [copied, setCopied] = useState(false);
+  const handle = () => {
+    onCopy();
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1200);
+  };
   return (
-    <div className="flex items-center gap-1 px-1 text-[11px]">
-      <span className="text-[10px] uppercase tracking-wide text-zinc-500">Key</span>
-      <div className="relative group">
-        <Info className="h-3 w-3 text-zinc-600 hover:text-zinc-400 cursor-help" />
-        <div className="invisible group-hover:visible opacity-0 group-hover:opacity-100 transition-opacity absolute left-5 top-1/2 -translate-y-1/2 z-20 bg-zinc-900 border border-zinc-700 rounded-md p-3 shadow-xl w-max">
-          <div className="flex flex-col gap-2 text-xs">
-            <Row bg={SRC.INPUT} label="Manual input" example="e.g. Duration, Total MW reduction, LYB capacities" />
-            <Row bg={SRC.AEMO} label="From AEMO" example="Actuals pulled from DISPATCHSCADA (LOYYB1, LOYYB2)" />
-            <Row bg={SRC.CALC} label="Calculated" example="Forecast, MW Loss, Cum MWh, Bid targets (derived from inputs)" />
-          </div>
-        </div>
-      </div>
+    <div className="inline-flex items-center gap-1.5">
+      <span className="flex flex-col items-end">
+        <span>{label}</span>
+        <span className="text-[9px] font-normal text-zinc-500">{subtitle}</span>
+      </span>
+      <button
+        onClick={handle}
+        title={`Copy column "${label}" (newline-separated)`}
+        className={`shrink-0 inline-flex items-center justify-center h-5 w-5 rounded transition-colors ${
+          copied
+            ? "bg-emerald-500/20 text-emerald-300"
+            : "bg-zinc-800/80 hover:bg-zinc-700 text-zinc-300"
+        }`}
+      >
+        {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+      </button>
     </div>
   );
 }
 
 function SummaryCard({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
-
   const copy = () => {
     void navigator.clipboard.writeText(text).then(() => {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1500);
     });
   };
-
   return (
     <Card className="bg-zinc-900/60 border-white/5 py-0 gap-0">
       <CardContent className="px-3 py-2 flex items-center gap-3">
@@ -288,13 +296,8 @@ function SummaryCard({ text }: { text: string }) {
   );
 }
 
-function Field({
-  label, children, className, tooltip,
-}: {
-  label: string;
-  children: React.ReactNode;
-  className?: string;
-  tooltip?: string;
+function Field({ label, children, className, tooltip }: {
+  label: string; children: React.ReactNode; className?: string; tooltip?: string;
 }) {
   return (
     <label className={`flex flex-col gap-1${className ? ` ${className}` : ""}`}>
@@ -311,7 +314,6 @@ function Field({
   );
 }
 
-/** Three-select time picker: hour (1–12), minute (0/5/…/55), AM/PM. Value + onChange in "HH:MM" 24-hr. */
 function TimePicker({ value, onChange }: { value: string; onChange: (hhmm24: string) => void }) {
   const [h24Str = "00", mStr = "00"] = value.split(":");
   const h24 = Number(h24Str);
@@ -356,15 +358,8 @@ function TimePicker({ value, onChange }: { value: string; onChange: (hhmm24: str
   );
 }
 
-function NumInput({
-  value, onChange, min, max, maxDigits, className,
-}: {
-  value: number;
-  onChange: (v: number) => void;
-  min?: number;
-  max?: number;
-  maxDigits?: number;
-  className?: string;
+function NumInput({ value, onChange, min, max, maxDigits, className }: {
+  value: number; onChange: (v: number) => void; min?: number; max?: number; maxDigits?: number; className?: string;
 }) {
   const [local, setLocal] = useState<string>(String(value));
 
@@ -383,9 +378,7 @@ function NumInput({
     if (Number.isFinite(n)) onChange(n);
   };
 
-  const handleBlur = () => {
-    if (local === "") setLocal(String(value));
-  };
+  const handleBlur = () => { if (local === "") setLocal(String(value)); };
 
   return (
     <input
@@ -425,4 +418,3 @@ function withDate(iso: string, dateStr: string): string {
 function withTime(iso: string, timeStr: string): string {
   return new Date(`${toDateInput(iso)}T${timeStr}`).toISOString();
 }
-
