@@ -25,6 +25,7 @@ export type NavTabId =
   | "market-nem"
   | "spikes"
   | "startcost"
+  | "bdlstart"
   | "offloading"
   | "braemar"
   | "bdl";
@@ -68,6 +69,7 @@ const SECTIONS: NavSection[] = [
     label: "Tools",
     items: [
       { id: "startcost", label: "Braemar Start", icon: Flag },
+      { id: "bdlstart", label: "BDL Start", icon: Flag },
       { id: "offloading", label: "Coal Offloading", icon: Flame },
       { id: "braemar", label: "Braemar Revenue", icon: Factory },
       { id: "bdl", label: "BDL Revenue", icon: Factory },

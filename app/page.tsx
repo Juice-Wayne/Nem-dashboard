@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useMemo, useCallback } from "react";
-import { Copy, Check, RefreshCw, Sun, Moon, Pencil, Save, Plus, X, Thermometer, Wind, Zap, ArrowLeftRight, AlertTriangle, Clock, Filter } from "lucide-react";
+import { Copy, Check, RefreshCw, Sun, Moon, Pencil, Save, Plus, X, Thermometer, Wind, Zap, ArrowLeftRight, AlertTriangle, Clock, Filter, Info } from "lucide-react";
 import useSWR from "swr";
 import { cn } from "@/lib/utils";
 import { useAutoRefresh } from "@/lib/hooks/use-auto-refresh";
@@ -169,7 +169,7 @@ type Direction = "all" | "increase" | "decrease";
 type TabId =
   | "prices" | "demand" | "interconnectors" | "sensitivities" | "actuals"
   | "market-nem"
-  | "spikes" | "startcost" | "offloading" | "braemar" | "bdl";
+  | "spikes" | "startcost" | "bdlstart" | "offloading" | "braemar" | "bdl";
 
 const REBIDS_TABS: ReadonlyArray<TabId> = ["prices", "demand", "interconnectors", "sensitivities", "actuals"];
 
@@ -586,6 +586,10 @@ export default function HomePage() {
 
         <TabsContent value="startcost">
           <StartCostTab />
+        </TabsContent>
+
+        <TabsContent value="bdlstart">
+          <BDLStartTab />
         </TabsContent>
 
         <TabsContent value="offloading" className="mt-4">
@@ -1640,6 +1644,15 @@ const QLD_SENS_SCENARIOS = [
   { rrpeep: 34, label: "QLD -500 MW" },
 ];
 
+const VIC_SENS_SCENARIOS = [
+  { rrpeep: 5, label: "VIC +100 MW" },
+  { rrpeep: 6, label: "VIC -100 MW" },
+  { rrpeep: 12, label: "VIC +200 MW" },
+  { rrpeep: 13, label: "VIC -200 MW" },
+  { rrpeep: 14, label: "VIC +500 MW" },
+  { rrpeep: 11, label: "VIC -500 MW" },
+];
+
 const BR_DEFAULTS = {
   gasCostGJ: 11.5,
   startCost: 35000,
@@ -1784,6 +1797,12 @@ function StartCostTab() {
               <option key={s.rrpeep} value={s.rrpeep}>{s.label}</option>
             ))}
           </select>
+          <span
+            title="+ = more demand in QLD. − = less demand in QLD."
+            className="cursor-help text-zinc-400 dark:text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300"
+          >
+            <Info className="h-3 w-3" />
+          </span>
         </div>
         <div className="flex items-center gap-2 ml-auto">
           <span className="text-[10px] text-zinc-600">
@@ -2019,6 +2038,385 @@ function StartCostTab() {
             ) : (
               <p className="text-[10px] text-zinc-600">
                 No profitable starts {tradingDay === "d+1" ? "for D+1" : "today"}{sensScenario ? ` using ${QLD_SENS_SCENARIOS.find(s => s.rrpeep === sensScenario)?.label ?? "sensitivity"} prices` : ""} (SRMC ${(result.srmc ?? computedSRMC).toFixed(2)}/MWh).
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
+// BDL Start Profitability (Bairnsdale Power Station, VIC1)
+// ============================================================
+
+// All BDL inputs start blank; the user fills them in and they persist to
+// localStorage under `nem-bdl-start-config`. No default values are pre-filled.
+const BDL_DEFAULTS = {
+  gasCostGJ: "",
+  transportGJ: "",
+  heatRate: "",
+  loadMW: "",
+  rampRate: "",
+  varMaintU1: "",
+  varMaintU2: "",
+  fixedCostU1: "",
+  fixedCostU2: "",
+};
+
+const BDL_STORAGE_KEY = "nem-bdl-start-config";
+
+function loadBDLConfig(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem(BDL_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch { return {}; }
+}
+
+function saveBDLConfig(cfg: Record<string, string>) {
+  try { localStorage.setItem(BDL_STORAGE_KEY, JSON.stringify(cfg)); } catch { /* noop */ }
+}
+
+function useBDLPersistentConfig(key: string, fallback: string): [string, (v: string) => void] {
+  const [val, setVal] = useState(() => {
+    const saved = loadBDLConfig()[key];
+    return saved !== undefined ? saved : fallback;
+  });
+  const update = useCallback((v: string) => {
+    setVal(v);
+    const cfg = loadBDLConfig();
+    cfg[key] = v;
+    saveBDLConfig(cfg);
+  }, [key]);
+  return [val, update];
+}
+
+function BDLStartTab() {
+  const [gasCostGJ, setGasCostGJ] = useBDLPersistentConfig("gasCostGJ", BDL_DEFAULTS.gasCostGJ);
+  const [transportGJ, setTransportGJ] = useBDLPersistentConfig("transportGJ", BDL_DEFAULTS.transportGJ);
+  const [heatRate, setHeatRate] = useBDLPersistentConfig("heatRate", BDL_DEFAULTS.heatRate);
+  const [loadMW, setLoadMW] = useBDLPersistentConfig("loadMW", BDL_DEFAULTS.loadMW);
+  const [rampRate, setRampRate] = useBDLPersistentConfig("rampRate", BDL_DEFAULTS.rampRate);
+  const [varMaintU1, setVarMaintU1] = useBDLPersistentConfig("varMaintU1", BDL_DEFAULTS.varMaintU1);
+  const [varMaintU2, setVarMaintU2] = useBDLPersistentConfig("varMaintU2", BDL_DEFAULTS.varMaintU2);
+  const [fixedCostU1, setFixedCostU1] = useBDLPersistentConfig("fixedCostU1", BDL_DEFAULTS.fixedCostU1);
+  const [fixedCostU2, setFixedCostU2] = useBDLPersistentConfig("fixedCostU2", BDL_DEFAULTS.fixedCostU2);
+  const [unit, setUnit] = useState<"U1" | "U2">("U1");
+  const [tradingDay, setTradingDay] = useState<"today" | "d+1">("today");
+  const [sensScenario, setSensScenario] = useState<number | 0>(0);
+  const [selectedStart, setSelectedStart] = useState<number>(0);
+  const [expandedStart, setExpandedStart] = useState<number | null>(null);
+  const [showUnprofitable, setShowUnprofitable] = useState(false);
+
+  const gas = Number(gasCostGJ) || 0;
+  const trans = Number(transportGJ) || 0;
+  const hr = Number(heatRate) || 0;
+  const mw = Number(loadMW) || 0;
+  const fuelCost = (gas + trans) * hr;
+  const varU1MWh = mw > 0 ? (Number(varMaintU1) || 0) / mw : 0;
+  const varU2MWh = mw > 0 ? (Number(varMaintU2) || 0) / mw : 0;
+  const srmcU1 = fuelCost + varU1MWh;
+  const srmcU2 = fuelCost + varU2MWh;
+  const activeSRMC = unit === "U1" ? srmcU1 : srmcU2;
+  const activeFixedCost = unit === "U1" ? Number(fixedCostU1) || 0 : Number(fixedCostU2) || 0;
+
+  // Pass effective SRMC via gasCostGJ (with heatRate=1) to reuse the existing
+  // start-cost analysis pipeline, which computes cost = mw × heatRate × gas × hrs.
+  const apiUrl = useMemo(() => {
+    const params = new URLSearchParams({
+      tab: "startcost",
+      region: "VIC1",
+      gasCostGJ: String(activeSRMC),
+      heatRate: "1",
+      loadMW: String(mw),
+      rampRate: String(Number(rampRate) || 0),
+      startCost: String(activeFixedCost),
+      day: tradingDay,
+    });
+    if (sensScenario) params.set("sensScenario", String(sensScenario));
+    return `/api/analytics?${params}`;
+  }, [activeSRMC, activeFixedCost, mw, rampRate, tradingDay, sensScenario]);
+
+  const { data, error, isValidating, mutate } = useSWR(apiUrl, analyticsFetcher, { refreshInterval: 30000 });
+  const result = data?.startcost as StartCostData | undefined;
+
+  const filteredAnalyses = useMemo(() => {
+    if (!result?.analyses) return [];
+    if (showUnprofitable) return result.analyses;
+    return result.analyses.filter((a) => a.optimalProfit > 0);
+  }, [result?.analyses, showUnprofitable]);
+
+  const unprofitableCount = (result?.analyses?.length ?? 0) - filteredAnalyses.length;
+  const selected = filteredAnalyses[selectedStart] ?? null;
+
+  const chartData = useMemo(() => {
+    if (!result?.allPrices) return [];
+    const mwMap = new Map<string, number>();
+    if (selected) for (const iv of selected.intervals) mwMap.set(iv.time, iv.mw);
+    return result.allPrices.map((p) => ({
+      time: p.time,
+      rrp: p.rrp,
+      mw: mwMap.get(p.time) ?? null,
+    }));
+  }, [result?.allPrices, selected]);
+
+  useEffect(() => {
+    if (result?.analyses && selectedStart >= result.analyses.length) setSelectedStart(0);
+  }, [result?.analyses, selectedStart]);
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-sm font-semibold">BDL Start Profitability</span>
+        <span className="text-[10px] text-zinc-500">VIC1 · Bairnsdale</span>
+        <div className="flex items-center gap-1 ml-2">
+          {(["U1", "U2"] as const).map((u) => (
+            <button
+              key={u}
+              onClick={() => { setUnit(u); setSelectedStart(0); setExpandedStart(null); }}
+              className={`px-2 py-1 text-[10px] rounded font-medium transition-colors ${unit === u ? "bg-emerald-500/15 text-emerald-400" : "text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.04]"}`}
+            >
+              Unit {u === "U1" ? "1" : "2"}
+            </button>
+          ))}
+        </div>
+        <div className="flex items-center gap-1 ml-2">
+          {(["today", "d+1"] as const).map((d) => (
+            <button
+              key={d}
+              onClick={() => { setTradingDay(d); setSelectedStart(0); setExpandedStart(null); }}
+              className={`px-2 py-1 text-[10px] rounded font-medium transition-colors ${tradingDay === d ? "bg-blue-500/15 text-blue-400" : "text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.04]"}`}
+            >
+              {d === "today" ? "Today" : "D+1"}
+            </button>
+          ))}
+        </div>
+        <div className="flex items-center gap-1 ml-2">
+          <span className="text-[10px] text-zinc-500">Price:</span>
+          <select
+            value={sensScenario}
+            onChange={(e) => { setSensScenario(Number(e.target.value)); setSelectedStart(0); setExpandedStart(null); }}
+            className="bg-zinc-100 dark:bg-zinc-800/80 border border-zinc-300 dark:border-zinc-700/50 rounded px-1.5 py-0.5 text-[10px] font-mono text-zinc-800 dark:text-zinc-200 focus:outline-none focus:border-blue-500/50"
+          >
+            <option value={0}>Base RRP</option>
+            {VIC_SENS_SCENARIOS.map((s) => (
+              <option key={s.rrpeep} value={s.rrpeep}>{s.label}</option>
+            ))}
+          </select>
+          <span
+            title="+ = more demand in VIC. − = less demand in VIC."
+            className="cursor-help text-zinc-400 dark:text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300"
+          >
+            <Info className="h-3 w-3" />
+          </span>
+        </div>
+        <div className="flex items-center gap-2 ml-auto">
+          <span className="text-[10px] text-zinc-600">
+            {result?.allPrices?.length ?? 0} intervals {sensScenario ? "(30min PD sensitivity)" : "(5min P5MIN + 30min PD)"}
+          </span>
+          <button
+            onClick={() => mutate()}
+            disabled={isValidating}
+            className="p-1 rounded hover:bg-white/[0.06] text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
+            title="Refresh"
+          >
+            <RefreshCw size={12} className={isValidating ? "animate-spin" : ""} />
+          </button>
+        </div>
+      </div>
+
+      <Card>
+        <CardContent className="p-3 space-y-2">
+          <div className="grid grid-cols-9 gap-3">
+            <ConfigInput label="Gas" unit="$/GJ" value={gasCostGJ} onChange={setGasCostGJ} width="w-full" />
+            <ConfigInput label="Transport" unit="$/GJ" value={transportGJ} onChange={setTransportGJ} width="w-full" />
+            <ConfigInput label="Heat Rate" unit="GJ/MWh" value={heatRate} onChange={setHeatRate} width="w-full" />
+            <ConfigInput label="Load" unit="MW" value={loadMW} onChange={setLoadMW} width="w-full" />
+            <ConfigInput label="Ramp Rate" unit="MW/min" value={rampRate} onChange={setRampRate} width="w-full" />
+            <ConfigInput label="U1 Var Maint" unit="$/h" value={varMaintU1} onChange={setVarMaintU1} width="w-full" />
+            <ConfigInput label="U2 Var Maint" unit="$/h" value={varMaintU2} onChange={setVarMaintU2} width="w-full" />
+            <ConfigInput label="U1 Fixed Start" unit="$" value={fixedCostU1} onChange={setFixedCostU1} width="w-full" />
+            <ConfigInput label="U2 Fixed Start" unit="$" value={fixedCostU2} onChange={setFixedCostU2} width="w-full" />
+          </div>
+          <div className="flex items-center gap-4 flex-wrap text-[11px] pt-1 border-t border-zinc-200 dark:border-zinc-800">
+            <div>
+              <span className="text-zinc-500">Fuel cost: </span>
+              <span className="font-mono text-zinc-800 dark:text-zinc-200">${fuelCost.toFixed(2)}/MWh</span>
+            </div>
+            <div>
+              <span className="text-zinc-500">U1 SRMC: </span>
+              <span className={`font-mono font-semibold ${unit === "U1" ? "text-emerald-500 dark:text-emerald-400" : "text-zinc-700 dark:text-zinc-300"}`}>${srmcU1.toFixed(2)}/MWh</span>
+            </div>
+            <div>
+              <span className="text-zinc-500">U2 SRMC: </span>
+              <span className={`font-mono font-semibold ${unit === "U2" ? "text-emerald-500 dark:text-emerald-400" : "text-zinc-700 dark:text-zinc-300"}`}>${srmcU2.toFixed(2)}/MWh</span>
+            </div>
+            {selected && (
+              <>
+                <div className="w-px h-6 bg-zinc-300 dark:bg-zinc-700 mx-1" />
+                {sensScenario > 0 && (
+                  <span className="px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-400 text-[9px] font-medium">
+                    {VIC_SENS_SCENARIOS.find(s => s.rrpeep === sensScenario)?.label ?? `RRPEEP${sensScenario}`}
+                  </span>
+                )}
+                <div>
+                  <span className="text-zinc-500">Start: </span>
+                  <span className="font-mono font-semibold text-blue-500 dark:text-blue-400">{shortDateTime(selected.startTime)}</span>
+                </div>
+                {selected.optimalStopTime && (
+                  <div>
+                    <span className="text-zinc-500">Off: </span>
+                    <span className="font-mono font-semibold text-amber-600 dark:text-amber-400">{shortDateTime(selected.optimalStopTime)}</span>
+                  </div>
+                )}
+                {selected.optimalRunMinutes != null && (
+                  <div>
+                    <span className="text-zinc-500">Run: </span>
+                    <span className="font-mono font-semibold">{selected.optimalRunMinutes >= 60 ? `${(selected.optimalRunMinutes / 60).toFixed(1)}h` : `${selected.optimalRunMinutes}min`}</span>
+                  </div>
+                )}
+                <div>
+                  <span className="text-zinc-500">Profit: </span>
+                  <span className={`font-mono font-semibold ${selected.optimalProfit > 0 ? "text-emerald-500 dark:text-emerald-400" : "text-red-500 dark:text-red-400"}`}>
+                    {selected.optimalProfit > 0 ? "+" : ""}${selected.optimalProfit.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                  </span>
+                </div>
+              </>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
+      {error && <div className="h-24 flex items-center justify-center text-red-400 text-sm">Failed to load start analysis</div>}
+      {!data && !error && <div className="h-24 flex items-center justify-center text-zinc-500 text-sm animate-pulse">Loading start analysis...</div>}
+
+      {chartData.length > 0 && (
+        <Card>
+          <CardContent className="p-3">
+            <ResponsiveContainer width="100%" height={220}>
+              <ComposedChart data={chartData}>
+                <XAxis dataKey="time" tick={{ fontSize: 9, fill: "#71717a" }} tickFormatter={shortTime} interval="preserveStartEnd" />
+                <YAxis yAxisId="price" tick={{ fontSize: 9, fill: "#71717a" }} tickFormatter={(v: number) => `$${v}`} width={50} />
+                <YAxis
+                  yAxisId="mw"
+                  orientation="right"
+                  tick={{ fontSize: 9, fill: "#71717a" }}
+                  tickFormatter={(v: number) => `${v}`}
+                  width={40}
+                  domain={[0, mw * 1.2 || 60]}
+                  label={{ value: "MW", angle: 90, position: "insideRight", style: { fontSize: 9, fill: "#52525b" } }}
+                />
+                <Tooltip content={<ChartTip />} />
+                <ReferenceLine yAxisId="price" y={activeSRMC} stroke="#3b82f6" strokeDasharray="4 4" strokeOpacity={0.8} strokeWidth={1.5} />
+                <Area yAxisId="price" type="stepAfter" dataKey="rrp" name="RRP" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.1} strokeWidth={1.5} />
+                <Area yAxisId="mw" type="stepAfter" dataKey="mw" name="MW" stroke="#10b981" fill="#10b981" fillOpacity={0.15} strokeWidth={2} connectNulls={false} />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
+      )}
+
+      {result && (
+        <Card>
+          <CardContent className="p-3">
+            <div className="flex items-center gap-3 mb-2">
+              {unprofitableCount > 0 && (
+                <button
+                  onClick={() => { setShowUnprofitable(!showUnprofitable); setSelectedStart(0); }}
+                  className="text-[10px] text-zinc-500 hover:text-zinc-300 transition-colors ml-auto"
+                >
+                  {showUnprofitable ? "Hide" : "Show"} {unprofitableCount} unprofitable
+                </button>
+              )}
+            </div>
+            {filteredAnalyses.length > 0 ? (
+              <div className="space-y-0">
+                <table className="w-full text-[11px]">
+                  <thead>
+                    <tr className="text-zinc-500 border-b border-zinc-200 dark:border-zinc-800">
+                      <th className="text-left py-1 pr-2 font-medium">Start</th>
+                      <th className="text-left py-1 pr-2 font-medium">Off</th>
+                      <th className="text-right py-1 pr-2 font-medium">Run</th>
+                      <th className="text-right py-1 pr-2 font-medium">Recovery</th>
+                      <th className="text-right py-1 font-medium">Profit</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredAnalyses.map((a, i) => (
+                      <React.Fragment key={i}>
+                        <tr
+                          onClick={() => { setSelectedStart(i); setExpandedStart(expandedStart === i ? null : i); }}
+                          className={`border-b border-zinc-200 dark:border-zinc-800/50 cursor-pointer transition-colors ${
+                            selectedStart === i ? "bg-blue-100 dark:bg-blue-500/10" : ""
+                          } ${a.recoveryTime ? "hover:bg-emerald-50 dark:hover:bg-emerald-500/5" : "hover:bg-zinc-100 dark:hover:bg-zinc-800/30"}`}
+                        >
+                          <td className="py-1 pr-2 font-mono">{shortDateTime(a.startTime)}</td>
+                          <td className="py-1 pr-2 font-mono text-amber-500 dark:text-amber-400/80">
+                            {a.optimalStopTime ? shortTime(a.optimalStopTime) : "—"}
+                          </td>
+                          <td className="py-1 pr-2 text-right font-mono">
+                            {a.optimalRunMinutes != null
+                              ? a.optimalRunMinutes >= 60
+                                ? `${(a.optimalRunMinutes / 60).toFixed(1)}h`
+                                : `${a.optimalRunMinutes}m`
+                              : "—"}
+                          </td>
+                          <td className={`py-1 pr-2 text-right font-mono ${a.recoveryMinutes ? "text-emerald-500 dark:text-emerald-400" : "text-zinc-400 dark:text-zinc-600"}`}>
+                            {a.recoveryMinutes ? `${a.recoveryMinutes}m` : "—"}
+                          </td>
+                          <td className={`py-1 text-right font-mono font-semibold ${a.optimalProfit > 0 ? "text-emerald-500 dark:text-emerald-400" : "text-red-500 dark:text-red-400"}`}>
+                            {a.optimalProfit > 0 ? "+" : ""}${a.optimalProfit.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                          </td>
+                        </tr>
+                        {expandedStart === i && (
+                          <tr key={`detail-${i}`}>
+                            <td colSpan={5} className="p-0">
+                              <div className="bg-zinc-50 dark:bg-zinc-900/50 border-y border-zinc-200 dark:border-zinc-800/50">
+                                <div className="max-h-48 overflow-y-auto px-3 py-2">
+                                  <table className="w-full text-[10px]">
+                                    <thead>
+                                      <tr className="text-zinc-600">
+                                        <th className="text-left py-0.5 pr-2">Time</th>
+                                        <th className="text-right py-0.5 pr-2">MW</th>
+                                        <th className="text-right py-0.5 pr-2">Price</th>
+                                        <th className="text-right py-0.5 pr-2">Revenue</th>
+                                        <th className="text-right py-0.5 pr-2">SRMC Cost</th>
+                                        <th className="text-right py-0.5 pr-2">Margin</th>
+                                        <th className="text-right py-0.5">Balance</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {a.intervals.map((iv, j) => (
+                                        <tr key={j} className={`border-t border-zinc-200 dark:border-zinc-800/30 ${iv.cumBalance > 0 ? "text-emerald-600 dark:text-emerald-400/80" : ""}`}>
+                                          <td className="py-0.5 pr-2 font-mono">{shortTime(iv.time)}</td>
+                                          <td className="py-0.5 pr-2 text-right font-mono">{iv.mw}</td>
+                                          <td className="py-0.5 pr-2 text-right font-mono">${iv.rrp.toFixed(2)}</td>
+                                          <td className="py-0.5 pr-2 text-right font-mono">${iv.revenue.toFixed(0)}</td>
+                                          <td className="py-0.5 pr-2 text-right font-mono text-zinc-500">${iv.gasCostInterval.toFixed(0)}</td>
+                                          <td className={`py-0.5 pr-2 text-right font-mono ${iv.margin > 0 ? "text-emerald-500 dark:text-emerald-400/70" : "text-red-500 dark:text-red-400/70"}`}>
+                                            {iv.margin > 0 ? "+" : ""}${iv.margin.toFixed(0)}
+                                          </td>
+                                          <td className={`py-0.5 text-right font-mono font-semibold ${iv.cumBalance > 0 ? "text-emerald-500 dark:text-emerald-400" : "text-red-500 dark:text-red-400"}`}>
+                                            ${iv.cumBalance.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                                          </td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="text-[10px] text-zinc-600">
+                No profitable starts {tradingDay === "d+1" ? "for D+1" : "today"} for Unit {unit === "U1" ? "1" : "2"}{sensScenario ? ` using ${VIC_SENS_SCENARIOS.find(s => s.rrpeep === sensScenario)?.label ?? "sensitivity"} prices` : ""} (SRMC ${activeSRMC.toFixed(2)}/MWh).
               </p>
             )}
           </CardContent>
