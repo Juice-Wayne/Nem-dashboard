@@ -72,7 +72,7 @@ const SECTIONS: NavSection[] = [
       { id: "bdlstart", label: "Bairnsdale Start", icon: Flag },
       { id: "offloading", label: "Coal Offloading", icon: Flame },
       { id: "braemar", label: "Braemar Revenue", icon: Factory },
-      { id: "bdl", label: "BDL Revenue", icon: Factory },
+      { id: "bdl", label: "Bairnsdale Revenue", icon: Factory },
     ],
   },
 ];

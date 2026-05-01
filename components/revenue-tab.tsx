@@ -11,7 +11,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 // Plant definitions — must match app/api/revenue/route.ts
 const PLANTS = {
   braemar: { duids: ["BRAEMAR1", "BRAEMAR2", "BRAEMAR3"], region: "QLD1", label: "Braemar" },
-  bdl: { duids: ["BDL01", "BDL02"], region: "VIC1", label: "BDL" },
+  bdl: { duids: ["BDL01", "BDL02"], region: "VIC1", label: "Bairnsdale" },
 } as const;
 
 export type PlantKey = keyof typeof PLANTS;
