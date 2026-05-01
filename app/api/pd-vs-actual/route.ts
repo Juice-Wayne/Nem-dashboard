@@ -32,7 +32,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json(
       { prices, demand, interconnectors },
-      { headers: isForce ? { "Cache-Control": "no-cache, no-store, must-revalidate" } : { "Cache-Control": "public, s-maxage=10, stale-while-revalidate=30" } },
+      { headers: isForce ? { "Cache-Control": "no-cache, no-store, must-revalidate" } : { "Cache-Control": "public, s-maxage=30, stale-while-revalidate=300" } },
     );
   } catch (error) {
     console.error("PD vs Actual API error:", error);

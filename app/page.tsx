@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { Copy, Check, RefreshCw, Sun, Moon, Pencil, Save, Plus, X, Thermometer, Wind, Zap, ArrowLeftRight, AlertTriangle, Clock, Filter, Info } from "lucide-react";
-import useSWR from "swr";
+import useSWR, { SWRConfig } from "swr";
 import { cn } from "@/lib/utils";
 import { useAutoRefresh } from "@/lib/hooks/use-auto-refresh";
 import { NemIntervalBar } from "@/components/nem-interval-bar";
@@ -280,6 +280,14 @@ function deltaColor(delta: number | null | undefined): string {
 // --- Page ---
 
 export default function HomePage() {
+  return (
+    <SWRConfig value={{ revalidateOnFocus: false, dedupingInterval: 30_000 }}>
+      <HomePageInner />
+    </SWRConfig>
+  );
+}
+
+function HomePageInner() {
   const [activeTab, setActiveTab] = useState<TabId>("prices");
   const [region, setRegion] = useState<string>("QLD1");
   const [interconnector, setInterconnector] = useState<string>("all");
@@ -1707,6 +1715,18 @@ function usePersistentConfig(key: string, fallback: string): [string, (v: string
   return [val, update];
 }
 
+// Debounce a value — used to keep the input responsive while delaying the
+// /api/analytics fetch until the user pauses typing, so each keystroke doesn't
+// hit the server.
+function useDebounced<T>(value: T, delayMs: number): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(value), delayMs);
+    return () => clearTimeout(t);
+  }, [value, delayMs]);
+  return debounced;
+}
+
 function StartCostTab() {
   const [gasCostGJ, setGasCostGJ] = usePersistentConfig("gasCostGJ", BR_DEFAULTS.gasCostGJ);
   const [startCost, setStartCost] = usePersistentConfig("startCost", BR_DEFAULTS.startCost);
@@ -1719,20 +1739,26 @@ function StartCostTab() {
   const [expandedStart, setExpandedStart] = useState<number | null>(null);
   const [showUnprofitable, setShowUnprofitable] = useState(false);
 
+  const dGasCostGJ = useDebounced(gasCostGJ, 500);
+  const dStartCost = useDebounced(startCost, 500);
+  const dLoadMW = useDebounced(loadMW, 500);
+  const dHeatRate = useDebounced(heatRate, 500);
+  const dRampRate = useDebounced(rampRate, 500);
+
   const apiUrl = useMemo(() => {
     const params = new URLSearchParams({
       tab: "startcost",
       region: "QLD1",
-      gasCostGJ,
-      startCost,
-      loadMW,
-      heatRate,
-      rampRate,
+      gasCostGJ: dGasCostGJ,
+      startCost: dStartCost,
+      loadMW: dLoadMW,
+      heatRate: dHeatRate,
+      rampRate: dRampRate,
       day: tradingDay,
     });
     if (sensScenario) params.set("sensScenario", String(sensScenario));
     return `/api/analytics?${params}`;
-  }, [gasCostGJ, startCost, loadMW, heatRate, rampRate, tradingDay, sensScenario]);
+  }, [dGasCostGJ, dStartCost, dLoadMW, dHeatRate, dRampRate, tradingDay, sensScenario]);
 
   const { data, error, isValidating, mutate } = useSWR(apiUrl, analyticsFetcher, { refreshInterval: 30000 });
 
@@ -2126,20 +2152,26 @@ function BDLStartTab() {
 
   // Pass effective SRMC via gasCostGJ (with heatRate=1) to reuse the existing
   // start-cost analysis pipeline, which computes cost = mw × heatRate × gas × hrs.
+  // Debounce the typed values so each keystroke doesn't refetch.
+  const dActiveSRMC = useDebounced(activeSRMC, 500);
+  const dActiveFixedCost = useDebounced(activeFixedCost, 500);
+  const dMw = useDebounced(mw, 500);
+  const dRampRate = useDebounced(rampRate, 500);
+
   const apiUrl = useMemo(() => {
     const params = new URLSearchParams({
       tab: "startcost",
       region: "VIC1",
-      gasCostGJ: String(activeSRMC),
+      gasCostGJ: String(dActiveSRMC),
       heatRate: "1",
-      loadMW: String(mw),
-      rampRate: String(Number(rampRate) || 0),
-      startCost: String(activeFixedCost),
+      loadMW: String(dMw),
+      rampRate: String(Number(dRampRate) || 0),
+      startCost: String(dActiveFixedCost),
       day: tradingDay,
     });
     if (sensScenario) params.set("sensScenario", String(sensScenario));
     return `/api/analytics?${params}`;
-  }, [activeSRMC, activeFixedCost, mw, rampRate, tradingDay, sensScenario]);
+  }, [dActiveSRMC, dActiveFixedCost, dMw, dRampRate, tradingDay, sensScenario]);
 
   const { data, error, isValidating, mutate } = useSWR(apiUrl, analyticsFetcher, { refreshInterval: 30000 });
   const result = data?.startcost as StartCostData | undefined;

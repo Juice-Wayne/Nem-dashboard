@@ -23,7 +23,7 @@ async function safeQuery<T>(fn: () => Promise<T[]>, label: string): Promise<T[]>
   }
 }
 
-const CACHE_HEADERS = { "Cache-Control": "public, s-maxage=10, stale-while-revalidate=30" };
+const CACHE_HEADERS = { "Cache-Control": "public, s-maxage=30, stale-while-revalidate=300" };
 const NO_CACHE_HEADERS = { "Cache-Control": "no-cache, no-store, must-revalidate" };
 
 export async function GET(request: NextRequest) {
