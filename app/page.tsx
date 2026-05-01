@@ -2168,7 +2168,7 @@ function BDLStartTab() {
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-2 flex-wrap">
-        <span className="text-sm font-semibold">BDL Start Profitability</span>
+        <span className="text-sm font-semibold">Bairnsdale Start Profitability</span>
         <span className="text-[10px] text-zinc-500">VIC1 · Bairnsdale</span>
         <div className="flex items-center gap-1 ml-2">
           {(["U1", "U2"] as const).map((u) => (
