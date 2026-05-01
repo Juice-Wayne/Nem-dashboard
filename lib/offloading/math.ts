@@ -29,27 +29,29 @@ export function snapToInterval(t: number | Date | string, mode: "ceil" | "floor"
   return new Date(fn(ms / stepMs) * stepMs).toISOString();
 }
 
+// Numeric user-input fields are nullable so first-time users see blank fields;
+// math treats null as 0.
 export interface OffloadConfig {
   /** ISO timestamp for the first 5-min interval ending. */
   startISO: string;
   /** Event length in hours. */
-  durationHrs: number;
+  durationHrs: number | null;
   /** Total MWh reduction across the event (uniformly spread across intervals). */
-  mwReduction: number;
+  mwReduction: number | null;
   /** Unit 1 registered capacity in MW. */
-  lyb1Cap: number;
+  lyb1Cap: number | null;
   /** Unit 2 registered capacity in MW. */
-  lyb2Cap: number;
+  lyb2Cap: number | null;
   /** Unit 1 ramp rate in MW/min. */
-  lyb1RampRate: number;
+  lyb1RampRate: number | null;
   /** Unit 2 ramp rate in MW/min. */
-  lyb2RampRate: number;
+  lyb2RampRate: number | null;
   /** Pre-offload target MW LYB1 will be running at entering the event. Used as ramp anchor. */
-  lyb1PreOffload: number;
+  lyb1PreOffload: number | null;
   /** Pre-offload target MW LYB2 will be running at entering the event. */
-  lyb2PreOffload: number;
+  lyb2PreOffload: number | null;
   /** Extra MWh of reduction to deliver above `mwReduction` as a safety margin. */
-  bufferMW: number;
+  bufferMW: number | null;
 }
 
 /** Pre-computed timeline (no PD, no targets yet). */
@@ -97,16 +99,18 @@ export interface ComputedRow extends ScheduleRow {
 }
 
 export function rowCount(config: OffloadConfig): number {
-  return Math.round(config.durationHrs * (60 / INTERVAL_MIN));
+  return Math.round((config.durationHrs ?? 0) * (60 / INTERVAL_MIN));
 }
 
 export function totalCap(config: OffloadConfig): number {
-  return config.lyb1Cap + config.lyb2Cap;
+  return (config.lyb1Cap ?? 0) + (config.lyb2Cap ?? 0);
 }
 
 /** Reduction MW per row (uniform across the event). */
 export function reductionMW(config: OffloadConfig): number {
-  return config.mwReduction / config.durationHrs;
+  const dur = config.durationHrs ?? 0;
+  if (dur <= 0) return 0;
+  return (config.mwReduction ?? 0) / dur;
 }
 
 /** Build the bare timeline (timestamps + uniform target cum MWh). */
@@ -114,7 +118,8 @@ export function buildSchedule(config: OffloadConfig): ScheduleRow[] {
   const rows: ScheduleRow[] = [];
   const start = new Date(config.startISO).getTime();
   const stepMs = INTERVAL_MIN * 60 * 1000;
-  const ratePerHour = config.mwReduction / config.durationHrs;
+  const dur = config.durationHrs ?? 0;
+  const ratePerHour = dur > 0 ? (config.mwReduction ?? 0) / dur : 0;
   const mwhPerInterval = ratePerHour * (INTERVAL_MIN / 60);
   const n = rowCount(config);
   for (let i = 0; i < n; i++) {
@@ -164,11 +169,11 @@ export function computeRows(
 
   const X = solveBidTarget(schedule, actualByInterval, config);
   const target = X;
-  const lyb1RampMW = config.lyb1RampRate * INTERVAL_MIN;
-  const lyb2RampMW = config.lyb2RampRate * INTERVAL_MIN;
+  const lyb1RampMW = (config.lyb1RampRate ?? 0) * INTERVAL_MIN;
+  const lyb2RampMW = (config.lyb2RampRate ?? 0) * INTERVAL_MIN;
 
-  let prevBid1 = config.lyb1PreOffload;
-  let prevBid2 = config.lyb2PreOffload;
+  let prevBid1 = config.lyb1PreOffload ?? 0;
+  let prevBid2 = config.lyb2PreOffload ?? 0;
   let cumMWh = 0;
 
   return schedule.map((row, i) => {
@@ -176,12 +181,12 @@ export function computeRows(
     const lyb1BidMW = clamp(
       clamp(target, prevBid1 - lyb1RampMW, prevBid1 + lyb1RampMW),
       0,
-      config.lyb1Cap,
+      config.lyb1Cap ?? 0,
     );
     const lyb2BidMW = clamp(
       clamp(target, prevBid2 - lyb2RampMW, prevBid2 + lyb2RampMW),
       0,
-      config.lyb2Cap,
+      config.lyb2Cap ?? 0,
     );
 
     const a = actualByInterval.get(row.intervalEnding);
@@ -245,9 +250,9 @@ function solveBidTarget(
   actualByInterval: ActualByInterval,
   config: OffloadConfig,
 ): number {
-  const goal = config.mwReduction + (config.bufferMW ?? 0);
+  const goal = (config.mwReduction ?? 0) + (config.bufferMW ?? 0);
   let lo = 0;
-  let hi = Math.max(config.lyb1Cap, config.lyb2Cap);
+  let hi = Math.max(config.lyb1Cap ?? 0, config.lyb2Cap ?? 0);
   for (let iter = 0; iter < 60; iter++) {
     const mid = (lo + hi) / 2;
     const delivered = simulateMWh(mid, schedule, actualByInterval, config);
@@ -263,16 +268,16 @@ function simulateMWh(
   actualByInterval: ActualByInterval,
   config: OffloadConfig,
 ): number {
-  const cap = config.lyb1Cap + config.lyb2Cap;
-  const r1 = config.lyb1RampRate * INTERVAL_MIN;
-  const r2 = config.lyb2RampRate * INTERVAL_MIN;
+  const cap = (config.lyb1Cap ?? 0) + (config.lyb2Cap ?? 0);
+  const r1 = (config.lyb1RampRate ?? 0) * INTERVAL_MIN;
+  const r2 = (config.lyb2RampRate ?? 0) * INTERVAL_MIN;
   const hr = INTERVAL_MIN / 60;
-  let prev1 = config.lyb1PreOffload;
-  let prev2 = config.lyb2PreOffload;
+  let prev1 = config.lyb1PreOffload ?? 0;
+  let prev2 = config.lyb2PreOffload ?? 0;
   let mw = 0;
   for (let i = 0; i < schedule.length; i++) {
-    const bid1 = clamp(clamp(X, prev1 - r1, prev1 + r1), 0, config.lyb1Cap);
-    const bid2 = clamp(clamp(X, prev2 - r2, prev2 + r2), 0, config.lyb2Cap);
+    const bid1 = clamp(clamp(X, prev1 - r1, prev1 + r1), 0, config.lyb1Cap ?? 0);
+    const bid2 = clamp(clamp(X, prev2 - r2, prev2 + r2), 0, config.lyb2Cap ?? 0);
     const a = actualByInterval.get(schedule[i].intervalEnding);
     const b = actualByInterval.get(schedule[i + 1]?.intervalEnding ?? "");
     let avg1: number;

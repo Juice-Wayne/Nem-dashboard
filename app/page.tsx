@@ -1653,12 +1653,14 @@ const VIC_SENS_SCENARIOS = [
   { rrpeep: 11, label: "VIC -500 MW" },
 ];
 
+// All BR inputs start blank; the user fills them in and they persist to
+// localStorage under `nem-br-config`. No default values are pre-filled.
 const BR_DEFAULTS = {
-  gasCostGJ: 11.5,
-  startCost: 35000,
-  loadMW: 170,
-  heatRate: 0,
-  rampRate: 0,
+  gasCostGJ: "",
+  startCost: "",
+  loadMW: "",
+  heatRate: "",
+  rampRate: "",
 };
 
 function ConfigInput({ label, unit, value, onChange, width }: { label: string; unit: string; value: string | number; onChange: (v: string) => void; width?: string }) {
@@ -1706,11 +1708,11 @@ function usePersistentConfig(key: string, fallback: string): [string, (v: string
 }
 
 function StartCostTab() {
-  const [gasCostGJ, setGasCostGJ] = usePersistentConfig("gasCostGJ", String(BR_DEFAULTS.gasCostGJ));
-  const [startCost, setStartCost] = usePersistentConfig("startCost", String(BR_DEFAULTS.startCost));
-  const [loadMW, setLoadMW] = usePersistentConfig("loadMW", String(BR_DEFAULTS.loadMW));
-  const [heatRate, setHeatRate] = usePersistentConfig("heatRate", String(BR_DEFAULTS.heatRate));
-  const [rampRate, setRampRate] = usePersistentConfig("rampRate", String(BR_DEFAULTS.rampRate));
+  const [gasCostGJ, setGasCostGJ] = usePersistentConfig("gasCostGJ", BR_DEFAULTS.gasCostGJ);
+  const [startCost, setStartCost] = usePersistentConfig("startCost", BR_DEFAULTS.startCost);
+  const [loadMW, setLoadMW] = usePersistentConfig("loadMW", BR_DEFAULTS.loadMW);
+  const [heatRate, setHeatRate] = usePersistentConfig("heatRate", BR_DEFAULTS.heatRate);
+  const [rampRate, setRampRate] = usePersistentConfig("rampRate", BR_DEFAULTS.rampRate);
   const [tradingDay, setTradingDay] = useState<"today" | "d+1">("today");
   const [sensScenario, setSensScenario] = useState<number | 0>(0);
   const [selectedStart, setSelectedStart] = useState<number>(0);
@@ -1826,6 +1828,7 @@ function StartCostTab() {
             <ConfigInput label="Heat Rate" unit="GJ/MWh" value={heatRate} onChange={setHeatRate} />
             <ConfigInput label="Load" unit="MW" value={loadMW} onChange={setLoadMW} />
             <ConfigInput label="Ramp Rate" unit="MW/min" value={rampRate} onChange={setRampRate} />
+            <ConfigInput label="Start Cost" unit="$" value={startCost} onChange={setStartCost} width="w-24" />
             <div className="flex items-center gap-1.5">
               <span className="text-[10px] text-zinc-500">SRMC:</span>
               <span className="text-[11px] font-mono font-semibold text-blue-400">${computedSRMC.toFixed(2)}/MWh</span>

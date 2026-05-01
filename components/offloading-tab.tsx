@@ -30,17 +30,19 @@ const HEADER_SRC = {
   BID:   "bg-purple-500/30",
 } as const;
 
+// All numeric inputs start blank for first-time users; once edited they
+// persist to localStorage under STORAGE_KEY.
 const DEFAULTS: OffloadConfig = {
   startISO: snapToInterval(Date.now()),
-  durationHrs: 4,
-  mwReduction: 1600,
-  lyb1Cap: 585,
-  lyb2Cap: 585,
-  lyb1RampRate: 10,
-  lyb2RampRate: 10,
-  lyb1PreOffload: 585,
-  lyb2PreOffload: 585,
-  bufferMW: 0,
+  durationHrs: null,
+  mwReduction: null,
+  lyb1Cap: null,
+  lyb2Cap: null,
+  lyb1RampRate: null,
+  lyb2RampRate: null,
+  lyb1PreOffload: null,
+  lyb2PreOffload: null,
+  bufferMW: null,
 };
 
 function loadConfig(): OffloadConfig {
@@ -186,9 +188,9 @@ export function OffloadingTab() {
 
   const summaryText = useMemo(() => {
     const startLabel = fmtTimeOnly(config.startISO);
-    const endISO = new Date(new Date(config.startISO).getTime() + config.durationHrs * 3600_000).toISOString();
+    const endISO = new Date(new Date(config.startISO).getTime() + (config.durationHrs ?? 0) * 3600_000).toISOString();
     const endLabel = fmtTimeOnly(endISO);
-    return `Coal offloading event — LYB reducing ${config.mwReduction.toFixed(0)} MWh from ${startLabel} to ${endLabel}.`;
+    return `Coal offloading event — LYB reducing ${(config.mwReduction ?? 0).toFixed(0)} MWh from ${startLabel} to ${endLabel}.`;
   }, [config]);
 
   const copyColumn = (values: Array<number | null>) => {
@@ -560,12 +562,13 @@ function TimePicker({ value, onChange }: { value: string; onChange: (hhmm24: str
 }
 
 function NumInput({ value, onChange, min, max, maxDigits, className }: {
-  value: number; onChange: (v: number) => void; min?: number; max?: number; maxDigits?: number; className?: string;
+  value: number | null; onChange: (v: number | null) => void; min?: number; max?: number; maxDigits?: number; className?: string;
 }) {
-  const [local, setLocal] = useState<string>(String(value));
+  const [local, setLocal] = useState<string>(value == null ? "" : String(value));
 
   useEffect(() => {
-    if (local === "" || Number(local) !== value) setLocal(String(value));
+    const incoming = value == null ? "" : String(value);
+    if (local !== incoming && Number(local) !== value) setLocal(incoming);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value]);
 
@@ -574,12 +577,13 @@ function NumInput({ value, onChange, min, max, maxDigits, className }: {
     if (raw !== "" && !/^\d*\.?\d*$/.test(raw)) return;
     if (maxDigits && raw.replace(/\D/g, "").length > maxDigits) return;
     setLocal(raw);
-    if (raw === "") return;
+    if (raw === "") {
+      onChange(null);
+      return;
+    }
     const n = Number(raw);
     if (Number.isFinite(n)) onChange(n);
   };
-
-  const handleBlur = () => { if (local === "") setLocal(String(value)); };
 
   return (
     <input
@@ -587,7 +591,6 @@ function NumInput({ value, onChange, min, max, maxDigits, className }: {
       inputMode="numeric"
       value={local}
       onChange={handleChange}
-      onBlur={handleBlur}
       min={min}
       max={max}
       className={`${INPUT_CLS}${className ? ` ${className}` : ""}`}
