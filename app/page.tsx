@@ -1772,7 +1772,7 @@ function StartCostTab() {
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-2 flex-wrap">
-        <span className="text-sm font-semibold">BR Start Profitability</span>
+        <span className="text-sm font-semibold">Braemar Start Profitability</span>
         <span className="text-[10px] text-zinc-500">QLD1</span>
         <div className="flex items-center gap-1 ml-2">
           {(["today", "d+1"] as const).map((d) => (
