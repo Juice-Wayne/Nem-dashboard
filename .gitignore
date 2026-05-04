@@ -55,3 +55,6 @@ nul
 
 # local debug / scratch data
 case.json
+
+# Playwright MCP screenshots / snapshots
+.playwright-mcp/

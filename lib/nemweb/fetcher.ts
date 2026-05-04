@@ -60,7 +60,7 @@ function releaseSlot(): void {
 
 // --- Retry helper ---
 
-async function fetchWithRetry(url: string, retries = 3): Promise<Response> {
+export async function fetchWithRetry(url: string, retries = 3): Promise<Response> {
   await acquireSlot();
   try {
     for (let i = 0; i <= retries; i++) {

@@ -1,4 +1,4 @@
-import { fetchLatest, normaliseDate, SOURCES, getDuidInfoMap, setSourceChangedCallback } from "./fetcher";
+import { fetchLatest, fetchWithRetry, normaliseDate, SOURCES, getDuidInfoMap, setSourceChangedCallback } from "./fetcher";
 import { getNeopointP5MinPriceChanges } from "./neopoint";
 
 // --- Result cache ---
@@ -953,6 +953,167 @@ export async function getReserveMargins(): Promise<
 
   results.sort((a, b) => a.INTERVAL_DATETIME.localeCompare(b.INTERVAL_DATETIME));
   return setCache("reserves", results);
+}
+
+// =======================================================================
+// Market Notices — AEMO publishes one plain-text file per notice in
+// /Reports/Current/Market_Notice/NEMITWEB1_MKTNOTICE_<YYYYMMDD>.R<noticeId>
+// =======================================================================
+
+export interface MarketNotice {
+  noticeId: number;
+  fileName: string;
+  issueDate: string;       // ISO YYYY-MM-DD
+  creationDateTime: string; // ISO datetime parsed from "Creation Date"
+  noticeType: string;      // e.g. "PRICES UNCHANGED", "RESERVE NOTICE", "LOR1"
+  noticeDescription: string;
+  externalReference: string;
+  reason: string;          // body
+  region: string | null;   // detected from body (NSW1, QLD1, VIC1, SA1, TAS1) if present
+  // Reserve-notice-specific enrichment (only populated when these signals are detectable)
+  lorLevel: number | null;          // 1, 2, or 3 — extracted from body
+  isCancellation: boolean;          // true if body talks about cancellation
+  cancelsNoticeId: number | null;   // referenced market notice number being cancelled / superseded
+}
+
+const NOTICE_BASE = "https://nemweb.com.au";
+const NOTICE_DIR = "/Reports/Current/Market_Notice/";
+
+const noticeContentCache = new Map<string, MarketNotice>(); // immutable: keyed by file URL
+let noticeListCache: { fileNames: string[]; expiry: number } | null = null;
+const NOTICE_LIST_TTL = 60_000; // 60s — directory polled for new notices
+
+async function fetchNoticeFileList(): Promise<string[]> {
+  if (noticeListCache && noticeListCache.expiry > Date.now()) return noticeListCache.fileNames;
+
+  const res = await fetchWithRetry(`${NOTICE_BASE}${NOTICE_DIR}`);
+  const html = await res.text();
+
+  const matches = html.match(/NEMITWEB1_MKTNOTICE_\d{8}\.R\d+/g) ?? [];
+  const fileNames = Array.from(new Set(matches));
+  // Sort by notice ID (suffix after .R) descending = newest first
+  fileNames.sort((a, b) => {
+    const idA = Number(a.match(/\.R(\d+)$/)?.[1] ?? "0");
+    const idB = Number(b.match(/\.R(\d+)$/)?.[1] ?? "0");
+    return idB - idA;
+  });
+
+  noticeListCache = { fileNames, expiry: Date.now() + NOTICE_LIST_TTL };
+  return fileNames;
+}
+
+function parseNoticeText(fileName: string, text: string): MarketNotice | null {
+  // Helper to grab a labelled field — labels look like "Notice ID               :         123"
+  const grab = (label: string): string => {
+    const re = new RegExp(`^${label}\\s*:\\s*(.+)$`, "im");
+    return text.match(re)?.[1].trim() ?? "";
+  };
+
+  // "Reason :" begins a multi-line body until "END OF REPORT" or end-of-file
+  const reasonMatch = text.match(/Reason\s*:\s*([\s\S]*?)(?=\n-+\s*\nEND OF REPORT|\nEND OF REPORT|$)/i);
+  const reason = reasonMatch ? reasonMatch[1].trim() : "";
+
+  const noticeId = Number(grab("Notice ID"));
+  if (!noticeId) return null;
+
+  // "Issue Date" comes as DD/MM/YYYY — normalise to YYYY-MM-DD
+  const issueRaw = grab("Issue Date");
+  const issueMatch = issueRaw.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+  const issueDate = issueMatch ? `${issueMatch[3]}-${issueMatch[2]}-${issueMatch[1]}` : "";
+
+  // "Creation Date :     04/03/2026     16:13:06"
+  const createRaw = text.match(/Creation Date\s*:\s*(\d{2}\/\d{2}\/\d{4})\s+(\d{2}:\d{2}:\d{2})/i);
+  let creationDateTime = "";
+  if (createRaw) {
+    const dm = createRaw[1].match(/(\d{2})\/(\d{2})\/(\d{4})/);
+    if (dm) creationDateTime = `${dm[3]}-${dm[2]}-${dm[1]}T${createRaw[2]}`;
+  }
+
+  const fullText = reason + " " + grab("External Reference") + " " + grab("Notice Type Description");
+
+  // Region in body — accept both "NSW1" form and "TAS region" / "TAS Region" form
+  const regionMatch = fullText.match(/\b(NSW1|QLD1|VIC1|SA1|TAS1)\b/);
+  let region: string | null = regionMatch ? regionMatch[1] : null;
+  if (!region) {
+    const stateMatch = fullText.match(/\b(NSW|QLD|VIC|SA|TAS)\s+(?:region|Region)\b/);
+    if (stateMatch) region = stateMatch[1] + "1";
+  }
+
+  // LOR level — pick the lowest level mentioned in the body that's also marked
+  // as forecast/declared/cancellation context. The body may mention "LRC/LOR1/LOR2/LOR3"
+  // generically (in External Reference summary) so we search the Reason for a specific level.
+  let lorLevel: number | null = null;
+  const lorInReason = reason.match(/\b(?:LOR|Lack of Reserve(?:\s+Level)?)\s*(\d)\b/i);
+  if (lorInReason) lorLevel = Number(lorInReason[1]);
+
+  // Cancellation — "is cancelled", "cancellation", "Cancellation of"
+  const isCancellation = /\bcancell?(?:ed|ation)\b/i.test(reason) || /^Cancell/i.test(grab("External Reference"));
+
+  // Cancels reference: "Market Notice No. 144025" or "advised in AEMO Electricity Market Notice No. 144025"
+  const cancelsMatch = reason.match(/Market Notice(?:\s+No\.?)?\s+(\d{4,7})/i);
+  const cancelsNoticeId = cancelsMatch ? Number(cancelsMatch[1]) : null;
+
+  return {
+    noticeId,
+    fileName,
+    issueDate,
+    creationDateTime,
+    noticeType: grab("Notice Type ID"),
+    noticeDescription: grab("Notice Type Description"),
+    externalReference: grab("External Reference"),
+    reason,
+    region,
+    lorLevel,
+    isCancellation,
+    cancelsNoticeId,
+  };
+}
+
+async function fetchAndParseNotice(fileName: string): Promise<MarketNotice | null> {
+  const cached = noticeContentCache.get(fileName);
+  if (cached) return cached;
+  try {
+    const url = `${NOTICE_BASE}${NOTICE_DIR}${fileName}`;
+    const res = await fetchWithRetry(url);
+    const text = await res.text();
+    const parsed = parseNoticeText(fileName, text);
+    if (parsed) noticeContentCache.set(fileName, parsed);
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+export interface MarketNoticesResult {
+  notices: MarketNotice[];
+  totalAvailable: number;
+  fetchedAt: string;
+}
+
+export async function getMarketNotices(limit: number = 500): Promise<MarketNoticesResult> {
+  const cacheKey = `marketNotices:${limit}`;
+  const cached = getCached<MarketNoticesResult>(cacheKey);
+  if (cached) return cached;
+
+  const fileNames = await fetchNoticeFileList();
+  const head = fileNames.slice(0, Math.min(limit, fileNames.length));
+
+  // Fire all requests in parallel — fetchWithRetry internally throttles via
+  // a 3-concurrency limiter and retries 403s with backoff. Cache hits return
+  // instantly so subsequent calls are nearly free.
+  const parsed = await Promise.all(head.map((f) => fetchAndParseNotice(f)));
+  const notices: MarketNotice[] = parsed.filter((n): n is MarketNotice => n !== null);
+  const failures = head.length - notices.length;
+  if (failures > 0) console.warn(`[notices] ${failures}/${head.length} notice fetches failed`);
+
+  notices.sort((a, b) => b.noticeId - a.noticeId); // newest first
+
+  const result: MarketNoticesResult = {
+    notices,
+    totalAvailable: fileNames.length,
+    fetchedAt: new Date().toISOString(),
+  };
+  return setCache(cacheKey, result);
 }
 
 // =======================================================================

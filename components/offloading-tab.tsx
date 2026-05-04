@@ -223,45 +223,45 @@ export function OffloadingTab() {
                 onChange={(hhmm24) => update("startISO", withTime(config.startISO, hhmm24))}
               />
             </Field>
-            <Field label="Duration (hrs)" tooltip="Total event duration in hours.">
+            <Field label="Duration (hrs)" tooltip="Event duration.">
               <NumInput className={SRC.INPUT} value={config.durationHrs} onChange={(v) => update("durationHrs", v)} min={1} max={99} maxDigits={2} />
             </Field>
-            <Field label="MWh reduction" tooltip="Total MWh to offload across the whole event.">
+            <Field label="MWh reduction" tooltip="Total MWh to offload.">
               <NumInput className={SRC.INPUT} value={config.mwReduction} onChange={(v) => update("mwReduction", v)} min={0} />
             </Field>
             <Field
               label="LYB1 cap (MW)"
-              tooltip="LYB1 registered capacity. Quarterly value provided by site."
+              tooltip="LYB1 registered capacity."
             >
               <NumInput className={SRC.INPUT} value={config.lyb1Cap} onChange={(v) => update("lyb1Cap", v)} min={0} max={999} maxDigits={3} />
             </Field>
             <Field
               label="LYB2 cap (MW)"
-              tooltip="LYB2 registered capacity. Quarterly value provided by site."
+              tooltip="LYB2 registered capacity."
             >
               <NumInput className={SRC.INPUT} value={config.lyb2Cap} onChange={(v) => update("lyb2Cap", v)} min={0} max={999} maxDigits={3} />
             </Field>
-            <Field label="LYB1 ramp (MW/m)" tooltip="LYB1 ramp rate of change.">
+            <Field label="LYB1 ramp (MW/m)" tooltip="LYB1 ramp rate.">
               <NumInput className={SRC.INPUT} value={config.lyb1RampRate} onChange={(v) => update("lyb1RampRate", v)} min={0} max={99} maxDigits={2} />
             </Field>
-            <Field label="LYB2 ramp (MW/m)" tooltip="LYB2 ramp rate of change.">
+            <Field label="LYB2 ramp (MW/m)" tooltip="LYB2 ramp rate.">
               <NumInput className={SRC.INPUT} value={config.lyb2RampRate} onChange={(v) => update("lyb2RampRate", v)} min={0} max={99} maxDigits={2} />
             </Field>
             <Field
               label="LYB1 pre-offload (MW)"
-              tooltip="MW LYB1 will be running at the interval immediately before the offload begins. Used as the ramp-down anchor for the first bid. Bids ramp from this value toward the offload setpoint at the LYB1 ramp rate."
+              tooltip="LYB1 MW just before the offload starts."
             >
               <NumInput className={SRC.INPUT} value={config.lyb1PreOffload} onChange={(v) => update("lyb1PreOffload", v)} min={0} max={999} maxDigits={3} />
             </Field>
             <Field
               label="LYB2 pre-offload (MW)"
-              tooltip="MW LYB2 will be running at the interval immediately before the offload begins. Used as the ramp-down anchor for the first bid. Bids ramp from this value toward the offload setpoint at the LYB2 ramp rate."
+              tooltip="LYB2 MW just before the offload starts."
             >
               <NumInput className={SRC.INPUT} value={config.lyb2PreOffload} onChange={(v) => update("lyb2PreOffload", v)} min={0} max={999} maxDigits={3} />
             </Field>
             <Field
               label="Buffer (MWh)"
-              tooltip="Extra MWh of reduction to deliver above the target. e.g. 10 MWh buffer + 1600 MWh reduction = solver aims for 1610 MWh total, so cum-delivered settles ~10 MWh above target as a safety margin."
+              tooltip="Extra MWh delivered above target as safety margin."
             >
               <NumInput className={SRC.INPUT} value={config.bufferMW} onChange={(v) => update("bufferMW", v)} min={0} max={999} maxDigits={3} />
             </Field>
@@ -343,7 +343,7 @@ function DeltaHeader() {
       <span className="inline-flex items-center gap-1">
         Δ vs target
         <span
-          title="Avg actual gen this interval minus the forecast target. Positive means the units stayed above target so upcoming bids drop further to make up the shortfall. Negative means we over-reduced and upcoming bids relax."
+          title="Actual gen minus forecast target. Positive = above target, negative = below."
           className="cursor-help text-zinc-400 dark:text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300"
         >
           <Info className="h-3 w-3" />
@@ -373,7 +373,7 @@ function ActualGenHeader({ onPull, pulling }: { onPull: () => void; pulling: boo
         <span className="inline-flex items-center gap-1">
           Actual gen
           <span
-            title="Actual MW at start of interval. Refresh to back-fill from SCADA, or edit manually."
+            title="Actual MW at start of interval."
             className="cursor-help text-zinc-400 dark:text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300"
           >
             <Info className="h-3 w-3" />
@@ -384,7 +384,7 @@ function ActualGenHeader({ onPull, pulling }: { onPull: () => void; pulling: boo
       <button
         onClick={onPull}
         disabled={pulling}
-        title="Pull actual SCADA data for past intervals"
+        title="Backfill SCADA"
         className={`shrink-0 inline-flex items-center justify-center h-5 w-5 rounded transition-colors ${
           pulling
             ? "bg-zinc-200 dark:bg-zinc-700 text-zinc-500 dark:text-zinc-400"
@@ -458,7 +458,7 @@ function CopyableHeader({ label, subtitle, onCopy }: { label: string; subtitle: 
       </span>
       <button
         onClick={handle}
-        title={`Copy column "${label}" (newline-separated)`}
+        title={`Copy ${label}`}
         className={`shrink-0 inline-flex items-center justify-center h-5 w-5 rounded transition-colors ${
           copied
             ? "bg-emerald-200 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300"

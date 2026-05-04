@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useMemo, useCallback } from "react";
-import { Copy, Check, RefreshCw, Sun, Moon, Pencil, Save, Plus, X, Thermometer, Wind, Zap, ArrowLeftRight, AlertTriangle, Clock, Filter, Info } from "lucide-react";
+import { Copy, Check, RefreshCw, Sun, Moon, Pencil, Save, Plus, X, Thermometer, Wind, Zap, ArrowLeftRight, AlertTriangle, Clock, Filter, Info, ChevronRight, ChevronDown } from "lucide-react";
 import useSWR, { SWRConfig } from "swr";
 import { cn } from "@/lib/utils";
 import { useAutoRefresh } from "@/lib/hooks/use-auto-refresh";
@@ -587,9 +587,8 @@ function HomePageInner() {
           />
         </TabsContent>
 
-        {/* === PRICE SPIKES TAB === */}
-        <TabsContent value="spikes">
-          <SpikesTab />
+        <TabsContent value="notices">
+          <MarketNoticesTab />
         </TabsContent>
 
         <TabsContent value="startcost">
@@ -1419,84 +1418,101 @@ function ChartTip({ active, payload, label }: any) {
   );
 }
 
+
 // ============================================================
-// Price Spike Lookback
+// Market Notices — AEMO NEMITWEB1_MKTNOTICE feed, filterable
 // ============================================================
 
-interface SpikeRow {
-  INTERVAL_DATETIME: string;
-  REGIONID: string;
-  RRP: number;
-  SEVERITY: "extreme" | "high" | "negative";
-  BINDING_CONSTRAINTS: { CONSTRAINTID: string; MARGINALVALUE: number }[];
+interface MarketNoticeDTO {
+  noticeId: number;
+  fileName: string;
+  issueDate: string;
+  creationDateTime: string;
+  noticeType: string;
+  noticeDescription: string;
+  externalReference: string;
+  reason: string;
+  region: string | null;
+  lorLevel: number | null;
+  isCancellation: boolean;
+  cancelsNoticeId: number | null;
+}
+interface MarketNoticesDTO {
+  notices: MarketNoticeDTO[];
+  totalAvailable: number;
+  fetchedAt: string;
 }
 
-const SEVERITY_STYLES: Record<string, { bg: string; text: string; label: string }> = {
-  extreme:  { bg: "bg-red-500/15",    text: "text-red-400",     label: "EXTREME (>$1,000)" },
-  high:     { bg: "bg-orange-500/15", text: "text-orange-400",  label: "HIGH (>$300)" },
-  negative: { bg: "bg-cyan-500/15",   text: "text-cyan-400",    label: "NEGATIVE (\u2264-$30)" },
-};
+function noticeTypeBadgeClass(type: string): string {
+  const t = type.toUpperCase();
+  if (t.includes("LOR3")) return "bg-red-600/20 text-red-500 dark:text-red-300 border-red-600/40";
+  if (t.includes("LOR2")) return "bg-orange-500/20 text-orange-600 dark:text-orange-400 border-orange-500/40";
+  if (t.includes("LOR1") || t.includes("RESERVE")) return "bg-yellow-500/15 text-yellow-700 dark:text-yellow-400 border-yellow-500/40";
+  if (t.includes("MARKET SUSPEND") || t.includes("APC")) return "bg-rose-500/15 text-rose-600 dark:text-rose-400 border-rose-500/40";
+  if (t.includes("NON-CREDIBLE") || t.includes("CREDIBLE")) return "bg-purple-500/15 text-purple-600 dark:text-purple-400 border-purple-500/40";
+  if (t.includes("CONSTRAINT")) return "bg-blue-500/15 text-blue-600 dark:text-blue-400 border-blue-500/40";
+  if (t.includes("PRICES UNCHANGED") || t.includes("PRICES")) return "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/40";
+  return "bg-zinc-500/15 text-zinc-600 dark:text-zinc-300 border-zinc-500/30";
+}
 
-const LOOKBACK_OPTIONS = [
-  { hours: 24, label: "1d" },
-  { hours: 168, label: "7d" },
-] as const;
+// Types hidden by default — these are high-frequency operational notices
+// that drown out the signal traders care about (LOR, suspension, intervention).
+const DEFAULT_HIDDEN_TYPES: string[] = ["RECLASSIFY CONTINGENCY", "PRICES UNCHANGED", "PRICES SUBJECT TO REVIEW"];
 
-function SpikesTab() {
-  const [hours, setHours] = useState<number>(24);
-  const [regionFilter, setRegionFilter] = useState("ALL");
-  const [severityFilter, setSeverityFilter] = useState("ALL");
-  const { data, error, isLoading, isValidating, mutate } = useSWR(`/api/analytics?tab=spikes&hours=${hours}`, analyticsFetcher, { refreshInterval: 30000 });
+function MarketNoticesTab() {
+  const [search, setSearch] = useState("");
+  const [typeFilter, setTypeFilter] = useState<string>("ALL");
+  const [regionFilter, setRegionFilter] = useState<string>("ALL");
+  const [hiddenTypes, setHiddenTypes] = useState<Set<string>>(() => new Set(DEFAULT_HIDDEN_TYPES));
+  const [expanded, setExpanded] = useState<number | null>(null);
+  const [hidePopoverOpen, setHidePopoverOpen] = useState(false);
 
-  const regions = useMemo(() => {
-    if (!data?.spikes) return [];
-    return [...new Set((data.spikes as SpikeRow[]).map((s) => s.REGIONID))].sort();
-  }, [data]);
+  const { data, error, isValidating, mutate } = useSWR<{ notices: MarketNoticesDTO | null; error?: string }>(
+    `/api/analytics?tab=notices&limit=500`,
+    analyticsFetcher,
+    { refreshInterval: 60_000 },
+  );
+
+  const result = data?.notices;
+
+  const types = useMemo(() => {
+    if (!result?.notices) return [];
+    const set = new Set(result.notices.map((n) => n.noticeType).filter(Boolean));
+    return Array.from(set).sort();
+  }, [result]);
 
   const filtered = useMemo(() => {
-    if (!data?.spikes) return [];
-    let rows = data.spikes as SpikeRow[];
-    if (regionFilter !== "ALL") {
-      rows = rows.filter((s) => s.REGIONID === regionFilter);
+    if (!result?.notices) return [];
+    let rows = result.notices;
+    // Apply hidden-types filter only when no explicit type selected
+    if (typeFilter === "ALL" && hiddenTypes.size > 0) {
+      rows = rows.filter((n) => !hiddenTypes.has(n.noticeType));
     }
-    if (severityFilter !== "ALL") {
-      rows = rows.filter((s) => s.SEVERITY === severityFilter);
+    if (typeFilter !== "ALL") rows = rows.filter((n) => n.noticeType === typeFilter);
+    if (regionFilter !== "ALL") rows = rows.filter((n) => n.region === regionFilter);
+    if (search.trim()) {
+      const q = search.trim().toLowerCase();
+      rows = rows.filter((n) =>
+        n.noticeType.toLowerCase().includes(q) ||
+        n.noticeDescription.toLowerCase().includes(q) ||
+        n.externalReference.toLowerCase().includes(q) ||
+        n.reason.toLowerCase().includes(q) ||
+        String(n.noticeId).includes(q),
+      );
     }
     return rows;
-  }, [data, regionFilter, severityFilter]);
-
-  const summary = useMemo(() => {
-    if (!data?.spikes) return { extreme: 0, high: 0, negative: 0, total: 0 };
-    const spikes = data.spikes as SpikeRow[];
-    return {
-      extreme: spikes.filter((s) => s.SEVERITY === "extreme").length,
-      high: spikes.filter((s) => s.SEVERITY === "high").length,
-      negative: spikes.filter((s) => s.SEVERITY === "negative").length,
-      total: spikes.length,
-    };
-  }, [data]);
-
-  if (error) return <div className="h-24 flex items-center justify-center text-red-400 text-sm">Failed to load spikes</div>;
-  if (!data) return <div className="h-24 flex items-center justify-center text-zinc-500 text-sm animate-pulse">Loading spikes...</div>;
+  }, [result, typeFilter, regionFilter, search, hiddenTypes]);
 
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-2 flex-wrap">
-        <span className="text-sm font-semibold">Price Spike Lookback</span>
-        <div className="flex items-center gap-1 ml-2">
-          {LOOKBACK_OPTIONS.map((opt) => (
-            <button
-              key={opt.hours}
-              onClick={() => setHours(opt.hours)}
-              className={`px-2 py-1 text-[10px] rounded font-medium transition-colors ${hours === opt.hours ? "bg-blue-500/15 text-blue-400" : "text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.04]"}`}
-            >
-              {opt.label}
-            </button>
-          ))}
-        </div>
-        {isLoading && <span className="text-[10px] text-zinc-600 animate-pulse">loading...</span>}
+        <span className="text-sm font-semibold">Market Notices</span>
         <div className="flex items-center gap-2 ml-auto">
-          <span className="text-[10px] text-zinc-600">{hours * 12} dispatch intervals</span>
+          {result && (
+            <span className="text-[10px] text-zinc-600">
+              {filtered.length} / {result.notices.length} shown · {result.totalAvailable} available · refreshed {shortTime(result.fetchedAt)}
+            </span>
+          )}
           <button
             onClick={() => mutate()}
             disabled={isValidating}
@@ -1509,102 +1525,199 @@ function SpikesTab() {
       </div>
 
       <div className="flex items-center gap-2 flex-wrap">
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search type, description, reason, ID…"
+          className="bg-zinc-100 dark:bg-zinc-800/80 border border-zinc-300 dark:border-zinc-700/50 rounded px-2 py-1 text-[11px] font-mono text-zinc-800 dark:text-zinc-200 focus:outline-none focus:border-blue-500/50 w-72"
+        />
+        <select
+          value={typeFilter}
+          onChange={(e) => setTypeFilter(e.target.value)}
+          className="bg-zinc-100 dark:bg-zinc-800/80 border border-zinc-300 dark:border-zinc-700/50 rounded px-1.5 py-1 text-[10px] font-mono text-zinc-800 dark:text-zinc-200 focus:outline-none focus:border-blue-500/50"
+          title="Show only this notice type"
+        >
+          <option value="ALL">Show all types ({types.length})</option>
+          {types.map((t) => <option key={t} value={t}>{t}</option>)}
+        </select>
         <div className="flex items-center gap-1">
-          <button
-            onClick={() => setRegionFilter("ALL")}
-            className={`px-2 py-1 text-[10px] rounded font-medium transition-colors ${regionFilter === "ALL" ? "bg-blue-500/15 text-blue-400" : "text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.04]"}`}
-          >
-            All regions
-          </button>
-          {regions.map((r) => (
+          {(["ALL", "NSW1", "QLD1", "VIC1", "SA1", "TAS1"] as const).map((r) => (
             <button
               key={r}
               onClick={() => setRegionFilter(r)}
               className={`px-2 py-1 text-[10px] rounded font-medium transition-colors ${regionFilter === r ? "bg-blue-500/15 text-blue-400" : "text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.04]"}`}
             >
-              {r.replace("1", "")}
+              {r === "ALL" ? "All regions" : r.replace("1", "")}
             </button>
           ))}
         </div>
-
         <span className="text-zinc-700">|</span>
-
-        <div className="flex items-center gap-1">
-          {[
-            { key: "ALL", label: `All (${summary.total})` },
-            ...(summary.extreme > 0 ? [{ key: "extreme", label: `Extreme (${summary.extreme})` }] : []),
-            ...(summary.high > 0 ? [{ key: "high", label: `High (${summary.high})` }] : []),
-            ...(summary.negative > 0 ? [{ key: "negative", label: `Negative (${summary.negative})` }] : []),
-          ].map((s) => (
-            <button
-              key={s.key}
-              onClick={() => setSeverityFilter(s.key)}
-              className={`px-2 py-1 text-[10px] rounded font-medium transition-colors ${severityFilter === s.key ? "bg-blue-500/15 text-blue-400" : "text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.04]"}`}
-            >
-              {s.label}
-            </button>
-          ))}
+        <div className="relative">
+          <button
+            onClick={() => setHidePopoverOpen(!hidePopoverOpen)}
+            disabled={typeFilter !== "ALL"}
+            className={cn(
+              "px-2 py-1 text-[10px] rounded font-medium border transition-colors",
+              typeFilter !== "ALL"
+                ? "border-zinc-300 dark:border-zinc-800 text-zinc-400 dark:text-zinc-600 cursor-not-allowed"
+                : "border-zinc-300 dark:border-zinc-700 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800/30",
+            )}
+            title={typeFilter !== "ALL" ? "Disabled while a single type is selected" : "Choose which notice types to hide"}
+          >
+            Hide types ({hiddenTypes.size})
+          </button>
+          {hidePopoverOpen && typeFilter === "ALL" && (
+            <div className="absolute z-50 mt-1 left-0 bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded shadow-lg p-2 min-w-64 max-h-72 overflow-y-auto">
+              <div className="flex items-center justify-between mb-2 pb-1 border-b border-zinc-200 dark:border-zinc-800">
+                <span className="text-[10px] font-medium text-zinc-700 dark:text-zinc-300">Hide types</span>
+                <div className="flex gap-1">
+                  <button
+                    onClick={() => setHiddenTypes(new Set(DEFAULT_HIDDEN_TYPES))}
+                    className="text-[9px] text-blue-500 hover:text-blue-400"
+                  >reset</button>
+                  <button
+                    onClick={() => setHiddenTypes(new Set())}
+                    className="text-[9px] text-blue-500 hover:text-blue-400"
+                  >clear</button>
+                </div>
+              </div>
+              <div className="space-y-1">
+                {types.map((t) => (
+                  <label key={t} className="flex items-center gap-1.5 text-[10px] text-zinc-700 dark:text-zinc-300 cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800/40 px-1 py-0.5 rounded">
+                    <input
+                      type="checkbox"
+                      checked={hiddenTypes.has(t)}
+                      onChange={(e) => {
+                        const s = new Set(hiddenTypes);
+                        if (e.target.checked) s.add(t); else s.delete(t);
+                        setHiddenTypes(s);
+                      }}
+                      className="h-3 w-3"
+                    />
+                    <span>{t}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
-      {filtered.length === 0 && (
-        <p className="text-zinc-500 text-sm p-4">No price spikes detected</p>
+      {error && <div className="h-24 flex items-center justify-center text-red-400 text-sm">Failed to load market notices</div>}
+      {!data && !error && <div className="h-24 flex items-center justify-center text-zinc-500 text-sm animate-pulse">Loading notices…</div>}
+      {data && !result && (
+        <div className="h-24 flex items-center justify-center text-zinc-500 text-sm">
+          {data.error ? `Error: ${data.error}` : "No notices available"}
+        </div>
       )}
 
-      {filtered.length > 0 && (
-        <div className="space-y-2">
-          {filtered.map((s, i) => {
-            const style = SEVERITY_STYLES[s.SEVERITY];
-            return (
-              <Card key={`${s.INTERVAL_DATETIME}-${s.REGIONID}-${i}`} className="rounded-xl">
-                <CardContent className="px-4 py-3">
-                  <div className="flex items-start gap-4">
-                    <div className="flex-shrink-0 text-right w-20">
-                      <p className="text-[10px] text-zinc-500">{shortDateTime(s.INTERVAL_DATETIME)}</p>
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className={`text-[9px] px-1.5 py-0.5 rounded font-semibold ${style.bg} ${style.text}`}>
-                          {style.label}
+      {result && (
+        <Card>
+          <CardContent className="p-3">
+            {filtered.length === 0 ? (
+              <p className="text-zinc-500 text-sm py-4 text-center">No notices match the current filters.</p>
+            ) : (
+              <div className="space-y-1">
+                {filtered.map((n) => {
+                  const isOpen = expanded === n.noticeId;
+                  // For reserve notices the noticeDescription is the generic
+                  // "LRC/LOR1/LOR2/LOR3" placeholder; the externalReference has
+                  // the actual specific text. Prefer that instead.
+                  const isGenericLorDesc = /^LRC\/LOR\d/i.test(n.noticeDescription);
+                  const rowText = isGenericLorDesc
+                    ? n.externalReference
+                    : (n.noticeDescription || n.externalReference || "—");
+                  // LOR / cancellation summary line — only meaningful for reserve notices
+                  const summaryBits: string[] = [];
+                  if (n.lorLevel) summaryBits.push(`LOR${n.lorLevel}`);
+                  if (n.region) summaryBits.push(n.region.replace(/1$/, ""));
+                  if (n.isCancellation) summaryBits.push("Cancellation");
+                  return (
+                    <div key={n.noticeId} className="border-b border-zinc-200 dark:border-zinc-800/50 last:border-b-0">
+                      <button
+                        onClick={() => setExpanded(isOpen ? null : n.noticeId)}
+                        className="w-full text-left py-1.5 px-2 hover:bg-zinc-100 dark:hover:bg-zinc-800/30 transition-colors grid items-center gap-3"
+                        style={{ gridTemplateColumns: "1rem 4.5rem 12rem 3.25rem 2.5rem 8rem 1fr" }}
+                      >
+                        <span className="text-zinc-500 dark:text-zinc-500 flex items-center justify-center">
+                          {isOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
                         </span>
-                        <span className="font-mono text-sm font-semibold text-zinc-200">
-                          {s.REGIONID.replace("1", "")}
+                        <span className="font-mono text-[10px] text-zinc-500">{n.noticeId}</span>
+                        <span className={cn("text-[9px] px-1.5 py-0.5 rounded border font-medium text-center truncate", noticeTypeBadgeClass(n.noticeType))}>
+                          {n.noticeType || "UNKNOWN"}
                         </span>
-                        <span className={`font-mono text-sm font-bold ${style.text}`}>
-                          ${s.RRP.toFixed(2)}/MWh
+                        <span className="text-center">
+                          {n.lorLevel ? (
+                            <span className={cn("text-[9px] px-1.5 py-0.5 rounded border font-bold inline-block",
+                              n.lorLevel === 3 ? "bg-red-600/20 text-red-500 border-red-600/40" :
+                              n.lorLevel === 2 ? "bg-orange-500/20 text-orange-600 dark:text-orange-400 border-orange-500/40" :
+                              "bg-yellow-500/15 text-yellow-700 dark:text-yellow-400 border-yellow-500/40",
+                            )}>
+                              LOR{n.lorLevel}
+                            </span>
+                          ) : <span className="text-zinc-300 dark:text-zinc-700 text-[9px]">—</span>}
                         </span>
-                      </div>
-                      {s.BINDING_CONSTRAINTS.length > 0 && (
-                        <div className="mt-2">
-                          <p className="text-[9px] text-zinc-600 uppercase tracking-wide mb-1">Likely cause — binding constraints</p>
-                          <div className="flex flex-wrap gap-1">
-                            {s.BINDING_CONSTRAINTS.map((c, ci) => (
-                              <span
-                                key={ci}
-                                className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-zinc-800/80 text-zinc-400"
-                                title={`MV: $${c.MARGINALVALUE.toFixed(2)}/MWh`}
+                        <span className="text-center">
+                          {n.region ? (
+                            <span className="text-[9px] px-1.5 py-0.5 rounded bg-zinc-200 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 font-mono inline-block">
+                              {n.region.replace(/1$/, "")}
+                            </span>
+                          ) : <span className="text-zinc-300 dark:text-zinc-700 text-[9px]">—</span>}
+                        </span>
+                        <span className="font-mono text-[10px] text-zinc-500">{n.creationDateTime ? shortDateTime(n.creationDateTime) : n.issueDate}</span>
+                        <span className="text-[11px] text-zinc-700 dark:text-zinc-300 truncate">{rowText}</span>
+                      </button>
+                      {expanded === n.noticeId && (
+                        <div className="px-3 py-2 bg-zinc-50 dark:bg-zinc-900/50 border-y border-zinc-200 dark:border-zinc-800/50 text-[11px] space-y-1">
+                          {summaryBits.length > 0 && (
+                            <div>
+                              <span className="text-zinc-500">Summary:</span>{" "}
+                              <span className="font-medium">{summaryBits.join(" · ")}</span>
+                            </div>
+                          )}
+                          {n.cancelsNoticeId && (
+                            <div>
+                              <span className="text-zinc-500">{n.isCancellation ? "Cancels notice" : "References notice"}:</span>{" "}
+                              <button
+                                onClick={(e) => { e.stopPropagation(); setSearch(String(n.cancelsNoticeId)); setExpanded(n.cancelsNoticeId); }}
+                                className="font-mono text-blue-500 hover:text-blue-400 underline"
+                                title="Filter to this notice in the current list"
                               >
-                                {c.CONSTRAINTID.length > 35 ? c.CONSTRAINTID.slice(0, 33) + "\u2026" : c.CONSTRAINTID}
-                                <span className="ml-1 text-zinc-600">${c.MARGINALVALUE.toFixed(0)}</span>
-                              </span>
-                            ))}
+                                #{n.cancelsNoticeId}
+                              </button>
+                            </div>
+                          )}
+                          {n.externalReference && (
+                            <div><span className="text-zinc-500">Reference:</span> <span className="font-mono">{n.externalReference}</span></div>
+                          )}
+                          <div><span className="text-zinc-500">Issue date:</span> <span className="font-mono">{n.issueDate}</span></div>
+                          <div className="pt-1">
+                            <div className="text-zinc-500 mb-0.5">Reason:</div>
+                            <pre className="font-mono text-[10px] whitespace-pre-wrap text-zinc-700 dark:text-zinc-300">{n.reason}</pre>
                           </div>
+                          <a
+                            href={`https://nemweb.com.au/Reports/Current/Market_Notice/${n.fileName}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-[10px] text-blue-500 hover:text-blue-400 underline"
+                          >
+                            source file →
+                          </a>
                         </div>
                       )}
-                      {s.BINDING_CONSTRAINTS.length === 0 && (
-                        <p className="text-[9px] text-zinc-600 mt-1">No binding constraints at this interval</p>
-                      )}
                     </div>
-                  </div>
-                </CardContent>
-              </Card>
-            );
-          })}
-        </div>
+                  );
+                })}
+              </div>
+            )}
+          </CardContent>
+        </Card>
       )}
     </div>
   );
 }
+
 
 // ============================================================
 // BR Start Cost Analysis
@@ -1826,7 +1939,7 @@ function StartCostTab() {
             ))}
           </select>
           <span
-            title="+ = more demand in QLD. − = less demand in QLD."
+            title="+ = more QLD demand; − = less"
             className="cursor-help text-zinc-400 dark:text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300"
           >
             <Info className="h-3 w-3" />
@@ -2240,7 +2353,7 @@ function BDLStartTab() {
             ))}
           </select>
           <span
-            title="+ = more demand in VIC. − = less demand in VIC."
+            title="+ = more VIC demand; − = less"
             className="cursor-help text-zinc-400 dark:text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300"
           >
             <Info className="h-3 w-3" />

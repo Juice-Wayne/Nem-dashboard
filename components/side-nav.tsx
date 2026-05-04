@@ -4,14 +4,15 @@ import React, { useEffect, useRef, useState } from "react";
 import {
   DollarSign,
   TrendingUp,
+  TrendingDown,
   ArrowLeftRight,
   SlidersHorizontal,
   Target,
   Zap,
   AlertTriangle,
   Flag,
-  Flame,
-  Factory,
+  Bell,
+  Coins,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -23,7 +24,7 @@ export type NavTabId =
   | "sensitivities"
   | "actuals"
   | "market-nem"
-  | "spikes"
+  | "notices"
   | "startcost"
   | "bdlstart"
   | "offloading"
@@ -61,7 +62,7 @@ const SECTIONS: NavSection[] = [
     label: "Market",
     items: [
       { id: "market-nem", label: "NEM Market Summary", letter: "N" },
-      { id: "spikes", label: "Spikes", icon: AlertTriangle },
+      { id: "notices", label: "Market Notices", icon: Bell },
     ],
   },
   {
@@ -70,9 +71,9 @@ const SECTIONS: NavSection[] = [
     items: [
       { id: "startcost", label: "Braemar Start", icon: Flag },
       { id: "bdlstart", label: "Bairnsdale Start", icon: Flag },
-      { id: "offloading", label: "Coal Offloading", icon: Flame },
-      { id: "braemar", label: "Braemar Revenue", icon: Factory },
-      { id: "bdl", label: "Bairnsdale Revenue", icon: Factory },
+      { id: "offloading", label: "Coal Offloading", icon: TrendingDown },
+      { id: "braemar", label: "Braemar Revenue", icon: Coins },
+      { id: "bdl", label: "Bairnsdale Revenue", icon: Coins },
     ],
   },
 ];

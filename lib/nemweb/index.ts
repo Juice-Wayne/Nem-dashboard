@@ -18,12 +18,13 @@ export {
   getPriceSpikes,
   getRooftopPV,
   getReserveMargins,
+  getMarketNotices,
   getStartCostAnalysis,
   getMarketSummary,
   clearResultCache,
 } from "./queries";
 
-export type { RebidEntry, PriceSpikeEntry, StartCostResult, StartCostConfig, StartAnalysis, StartInterval, MarketSummaryResult, MarketRegionSummary, MarketICBinding, MarketOutage, MarketUpcomingOutage, MarketTemps } from "./queries";
+export type { RebidEntry, PriceSpikeEntry, StartCostResult, StartCostConfig, StartAnalysis, StartInterval, MarketSummaryResult, MarketRegionSummary, MarketICBinding, MarketOutage, MarketUpcomingOutage, MarketTemps, MarketNotice, MarketNoticesResult } from "./queries";
 export { DEFAULT_START_COST_CONFIG } from "./queries";
 
 export { clearDirCache, clearCsvCache, getDuidFuelMap, getDuidInfoMap, fetchArchiveDay, clearArchiveCache, fetchLatest, SOURCES } from "./fetcher";

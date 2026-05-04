@@ -6,9 +6,9 @@ import {
   getFcasPrices,
   getBidStack,
   getRebidFeed,
-  getPriceSpikes,
   getRooftopPV,
   getReserveMargins,
+  getMarketNotices,
   getStartCostAnalysis,
   getMarketSummary,
   DEFAULT_START_COST_CONFIG,
@@ -69,15 +69,21 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ reserves: data }, { headers });
     }
 
+    if (tab === "notices") {
+      const limit = Number(request.nextUrl.searchParams.get("limit")) || 500;
+      try {
+        const data = await getMarketNotices(Math.min(Math.max(limit, 50), 500));
+        return NextResponse.json({ notices: data }, { headers });
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        console.warn("[analytics] market notices failed:", msg);
+        return NextResponse.json({ notices: null, error: msg }, { headers });
+      }
+    }
+
     if (tab === "rebids") {
       const data = await safeQuery(getRebidFeed, "BIDMOVE_REBIDS");
       return NextResponse.json({ rebids: data }, { headers });
-    }
-
-    if (tab === "spikes") {
-      const hours = Number(request.nextUrl.searchParams.get("hours")) || 3;
-      const data = await safeQuery(() => getPriceSpikes(hours), "PRICE_SPIKES");
-      return NextResponse.json({ spikes: data }, { headers });
     }
 
     if (tab === "market") {
@@ -89,11 +95,11 @@ export async function GET(request: NextRequest) {
       const region = request.nextUrl.searchParams.get("region") || "QLD1";
       const sp = request.nextUrl.searchParams;
       const config = {
-        gasCostGJ: Number(sp.get("gasCostGJ")) || DEFAULT_START_COST_CONFIG.gasCostGJ,
+        gasCostGJ: sp.has("gasCostGJ") ? Number(sp.get("gasCostGJ")) : DEFAULT_START_COST_CONFIG.gasCostGJ,
         startCost: sp.has("startCost") ? Number(sp.get("startCost")) : DEFAULT_START_COST_CONFIG.startCost,
-        loadMW: Number(sp.get("loadMW")) || DEFAULT_START_COST_CONFIG.loadMW,
-        heatRate: Number(sp.get("heatRate")) || DEFAULT_START_COST_CONFIG.heatRate,
-        rampRateMWMin: Number(sp.get("rampRate")) || DEFAULT_START_COST_CONFIG.rampRateMWMin,
+        loadMW: sp.has("loadMW") ? Number(sp.get("loadMW")) : DEFAULT_START_COST_CONFIG.loadMW,
+        heatRate: sp.has("heatRate") ? Number(sp.get("heatRate")) : DEFAULT_START_COST_CONFIG.heatRate,
+        rampRateMWMin: sp.has("rampRate") ? Number(sp.get("rampRate")) : DEFAULT_START_COST_CONFIG.rampRateMWMin,
       };
       const day = (sp.get("day") === "d+1" ? "d+1" : "today") as "today" | "d+1";
       const sensScenario = sp.get("sensScenario") ? Number(sp.get("sensScenario")) : undefined;
