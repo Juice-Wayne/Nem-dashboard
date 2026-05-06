@@ -592,18 +592,20 @@ function HomePageInner() {
           <MarketNoticesTab />
         </TabsContent>
 
-        <TabsContent value="startcost">
-          <StartCostTab />
-        </TabsContent>
-
-        <TabsContent value="bdlstart">
-          <BDLStartTab />
-        </TabsContent>
-
         {IS_DEV && (
-          <TabsContent value="offloading" className="mt-4">
-            <OffloadingTab />
-          </TabsContent>
+          <>
+            <TabsContent value="startcost">
+              <StartCostTab />
+            </TabsContent>
+
+            <TabsContent value="bdlstart">
+              <BDLStartTab />
+            </TabsContent>
+
+            <TabsContent value="offloading" className="mt-4">
+              <OffloadingTab />
+            </TabsContent>
+          </>
         )}
 
         {/* === MARKET ANALYSIS TAB === */}
