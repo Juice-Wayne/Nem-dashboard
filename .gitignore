@@ -58,3 +58,7 @@ case.json
 
 # Playwright MCP screenshots / snapshots
 .playwright-mcp/
+
+# Docs
+docs/
+/docs/

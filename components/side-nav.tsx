@@ -12,7 +12,6 @@ import {
   AlertTriangle,
   Flag,
   Bell,
-  Coins,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -27,9 +26,21 @@ export type NavTabId =
   | "notices"
   | "startcost"
   | "bdlstart"
-  | "offloading"
-  | "braemar"
-  | "bdl";
+  | "offloading";
+
+const IS_DEV = process.env.NODE_ENV === "development";
+
+const PROTECTED_TABS: ReadonlySet<NavTabId> = new Set(["startcost", "bdlstart", "offloading"]);
+const UNLOCK_KEY = "nem-tools-unlock";
+const UNLOCK_PASSWORD = "power";
+
+function isToolsUnlocked(): boolean {
+  if (typeof window === "undefined") return false;
+  try { return sessionStorage.getItem(UNLOCK_KEY) === "1"; } catch { return false; }
+}
+function markToolsUnlocked(): void {
+  try { sessionStorage.setItem(UNLOCK_KEY, "1"); } catch { /* noop */ }
+}
 
 interface NavItem {
   id: NavTabId;
@@ -71,9 +82,9 @@ const SECTIONS: NavSection[] = [
     items: [
       { id: "startcost", label: "Braemar Start", icon: Flag },
       { id: "bdlstart", label: "Bairnsdale Start", icon: Flag },
-      { id: "offloading", label: "Coal Offloading", icon: TrendingDown },
-      { id: "braemar", label: "Braemar Revenue", icon: Coins },
-      { id: "bdl", label: "Bairnsdale Revenue", icon: Coins },
+      ...(IS_DEV
+        ? [{ id: "offloading" as const, label: "Coal Offloading", icon: TrendingDown }]
+        : []),
     ],
   },
 ];
@@ -161,7 +172,14 @@ export function SideNav({
                     item={item}
                     active={activeTab === item.id}
                     expanded={expanded}
-                    onClick={() => onTabChange(item.id)}
+                    onClick={() => {
+                      if (PROTECTED_TABS.has(item.id) && !isToolsUnlocked()) {
+                        const pw = window.prompt("Enter password");
+                        if (pw !== UNLOCK_PASSWORD) return;
+                        markToolsUnlocked();
+                      }
+                      onTabChange(item.id);
+                    }}
                   />
                 ))}
               </div>

@@ -6,7 +6,6 @@ import useSWR, { SWRConfig } from "swr";
 import { cn } from "@/lib/utils";
 import { useAutoRefresh } from "@/lib/hooks/use-auto-refresh";
 import { NemIntervalBar } from "@/components/nem-interval-bar";
-import { RevenueTab } from "@/components/revenue-tab";
 import { OffloadingTab } from "@/components/offloading-tab";
 import { SideNav, SIDE_NAV_COLLAPSED_WIDTH, type NavTabId } from "@/components/side-nav";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -169,7 +168,9 @@ type Direction = "all" | "increase" | "decrease";
 type TabId =
   | "prices" | "demand" | "interconnectors" | "sensitivities" | "actuals"
   | "market-nem"
-  | "spikes" | "startcost" | "bdlstart" | "offloading" | "braemar" | "bdl";
+  | "spikes" | "startcost" | "bdlstart" | "offloading";
+
+const IS_DEV = process.env.NODE_ENV === "development";
 
 const REBIDS_TABS: ReadonlyArray<TabId> = ["prices", "demand", "interconnectors", "sensitivities", "actuals"];
 
@@ -599,20 +600,15 @@ function HomePageInner() {
           <BDLStartTab />
         </TabsContent>
 
-        <TabsContent value="offloading" className="mt-4">
-          <OffloadingTab />
-        </TabsContent>
+        {IS_DEV && (
+          <TabsContent value="offloading" className="mt-4">
+            <OffloadingTab />
+          </TabsContent>
+        )}
 
         {/* === MARKET ANALYSIS TAB === */}
         <TabsContent value="market-nem" className="mt-4">
           <MarketAnalysisTab />
-        </TabsContent>
-
-        <TabsContent value="braemar" className="mt-4">
-          <RevenueTab plant="braemar" />
-        </TabsContent>
-        <TabsContent value="bdl" className="mt-4">
-          <RevenueTab plant="bdl" />
         </TabsContent>
 
           </div>

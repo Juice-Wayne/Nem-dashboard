@@ -6,9 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint",
-    "build:revenue": "node --max-old-space-size=8192 --import tsx scripts/build-revenue-archive.ts",
-    "build:revenue:neopoint": "node --max-old-space-size=8192 --import tsx scripts/build-revenue-neopoint.ts"
+    "lint": "eslint"
   },
   "dependencies": {
     "@tremor/react": "^3.18.7",
