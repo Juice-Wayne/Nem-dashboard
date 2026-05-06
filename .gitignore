@@ -62,3 +62,6 @@ case.json
 # Docs
 docs/
 /docs/
+
+# Local IDE/agent settings
+.claude/
